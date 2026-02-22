@@ -129,23 +129,60 @@ func renderHeader() {
 	fmt.Println(statusStyle.Render(fmt.Sprintf("  Monitor: %s%s\n", statusText, pidText)))
 }
 
-// runDashboardAddInteraction shows the compact header then prompts for a file
-// path to add. Returns true if the user cancelled (Ctrl+C or empty input),
-// meaning the caller should skip waitForEnter and go straight back to the menu.
+// runDashboardAddInteraction is a multi-step wizard for adding a file to monitor.
+// Returns true if the user cancelled at any step.
 func runDashboardAddInteraction() bool {
+	// Step 1: File path
 	clearScreen()
 	renderCompactHeader()
 	var filePath string
 	err := huh.NewInput().
-		Title("Enter file path to add (empty to cancel):").
+		Title("Step 1/2 – Enter file path to add (empty to cancel):").
 		Value(&filePath).
 		Run()
-
-	// Ctrl+C returns an error; empty input means the user wants to go back
 	if err != nil || filePath == "" {
 		return true
 	}
+
+	// Step 2: New Gist or link to existing?
+	clearScreen()
+	renderCompactHeader()
+	var gistMode string
+	err = huh.NewSelect[string]().
+		Title("Step 2/2 – How should this file be tracked?").
+		Options(
+			huh.NewOption("Create a new Gist", "new"),
+			huh.NewOption("Link to an existing Gist", "existing"),
+			huh.NewOption("← Cancel", "cancel"),
+		).
+		Value(&gistMode).
+		Run()
+	if err != nil || gistMode == "cancel" {
+		return true
+	}
+
+	if gistMode == "new" {
+		_ = addCmd.RunE(addCmd, []string{filePath})
+		return false
+	}
+
+	// Step 3: Ask for the existing Gist ID
+	clearScreen()
+	renderCompactHeader()
+	var gistID string
+	err = huh.NewInput().
+		Title("Enter Gist ID to link to (empty to cancel):").
+		Value(&gistID).
+		Run()
+	if err != nil || gistID == "" {
+		return true
+	}
+
+	// Set the gist-id flag and execute
+	_ = addCmd.Flags().Set("gist-id", gistID)
 	_ = addCmd.RunE(addCmd, []string{filePath})
+	// Reset the flag so it doesn't persist across calls
+	_ = addCmd.Flags().Set("gist-id", "")
 	return false
 }
 
