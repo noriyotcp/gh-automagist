@@ -35,7 +35,9 @@ func runDashboard() {
 		clearScreen()
 		renderHeader()
 
-		// Create the selection menu
+		// Create the selection menu (with filter hint disabled – not needed for 7-item menu)
+		km := huh.NewDefaultKeyMap()
+		km.Select.Filter.SetEnabled(false)
 		form := huh.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
@@ -50,7 +52,7 @@ func runDashboard() {
 					).
 					Value(&action),
 			),
-		)
+		).WithKeyMap(km)
 
 		err := form.Run()
 		if err != nil {
