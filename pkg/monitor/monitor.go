@@ -43,12 +43,19 @@ func (w *Watcher) Start() error {
 	}
 
 	for dir := range dirsToWatch {
+		// When using fsnotify.Add(), macOS FSEvents might attempt to scan the directory.
+		// If the directory contains broken symlinks (e.g., dangling dotfiles), it can throw an error like:
+		// "no such file or directory". We should catch this but not let it crash the whole monitor.
+		// With go's fsnotify, if we add a path ending in `/...`, it watches recursively, but we are just adding `dir`.
 		err := w.watcher.Add(dir)
 		if err != nil {
-			log.Printf("Warning: failed to watch directory %s: %v", dir, err)
-			continue
+			log.Printf("Warning: failed to watch directory cleanly %s: %v", dir, err)
+			log.Printf("  -> This is often caused by broken symlinks in the directory. Continuing anyway.")
+			// We intentionally do not 'continue' or 'return' here, because fsnotify often still succeeds
+			// in watching the valid files in the directory despite throwing an error on the broken symlink.
+		} else {
+			log.Printf("[gh-automagist] Watching directory: %s", dir)
 		}
-		log.Printf("[gh-automagist] Watching directory: %s", dir)
 	}
 
 	// 2. Start the event loop
