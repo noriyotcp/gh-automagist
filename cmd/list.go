@@ -51,14 +51,15 @@ func runListInteractive() (bool, error) {
 		form := huh.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
-					Title("Select a file (press / to search)").
+					Title("Select a file  (/ to filter, esc to clear)").
 					Options(options...).
 					Value(&selectedItem),
 			),
 		)
 
 		if err := form.Run(); err != nil {
-			return false, err
+			// Ctrl+C: go back
+			return true, nil
 		}
 
 		if selectedItem == "__back__" {
