@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -186,22 +187,66 @@ func runDashboardAddInteraction() bool {
 	return false
 }
 
-// runDashboardRemoveInteraction shows the compact header then prompts for a
-// file path to remove. Returns true if the user cancelled.
+// runDashboardRemoveInteraction shows a selectable list of monitored files,
+// then confirms before removing. Returns true if the user cancelled.
 func runDashboardRemoveInteraction() bool {
-	clearScreen()
-	renderCompactHeader()
-	var filePath string
-	err := huh.NewInput().
-		Title("Enter file path to remove (empty to cancel):").
-		Value(&filePath).
-		Run()
-
-	if err != nil || filePath == "" {
+	sm, err := state.NewManager()
+	if err != nil {
 		return true
 	}
-	_ = removeCmd.RunE(removeCmd, []string{filePath})
+	if err := sm.Load(); err != nil {
+		return true
+	}
+	if len(sm.Files) == 0 {
+		clearScreen()
+		renderCompactHeader()
+		fmt.Println("No monitored files to remove.")
+		waitForEnter()
+		return true
+	}
+
+	// Build the selection list
+	clearScreen()
+	renderCompactHeader()
+	var options []huh.Option[string]
+	options = append(options, huh.NewOption("← Cancel", ""))
+	for path := range sm.Files {
+		label := strings.Replace(path, homeDir(), "~", 1)
+		options = append(options, huh.NewOption(label, path))
+	}
+
+	var selectedPath string
+	err = huh.NewSelect[string]().
+		Title("Select a file to stop monitoring:").
+		Options(options...).
+		Value(&selectedPath).
+		Run()
+	if err != nil || selectedPath == "" {
+		return true
+	}
+
+	// Confirmation step
+	clearScreen()
+	renderCompactHeader()
+	var confirmed bool
+	err = huh.NewConfirm().
+		Title(fmt.Sprintf("Stop monitoring %s?", strings.Replace(selectedPath, homeDir(), "~", 1))).
+		Value(&confirmed).
+		Run()
+	if err != nil || !confirmed {
+		return true
+	}
+
+	_ = removeCmd.RunE(removeCmd, []string{selectedPath})
 	return false
+}
+
+// homeDir returns the user's home directory path.
+func homeDir() string {
+	if h, err := os.UserHomeDir(); err == nil {
+		return h
+	}
+	return ""
 }
 
 func waitForEnter() {
