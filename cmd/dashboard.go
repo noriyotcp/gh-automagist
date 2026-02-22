@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -75,7 +77,7 @@ func runDashboard() {
 				backedOut = true
 			}
 		case "start":
-			_ = monitorCmd.RunE(monitorCmd, []string{})
+			startMonitorInBackground()
 		case "stop":
 			_ = stopCmd.RunE(stopCmd, []string{})
 		case "exit":
@@ -254,6 +256,45 @@ func homeDir() string {
 		return h
 	}
 	return ""
+}
+
+// startMonitorInBackground launches the monitor as a detached background
+// process using the current binary, so the dashboard is not blocked.
+func startMonitorInBackground() {
+	binary, err := os.Executable()
+	if err != nil {
+		fmt.Println("Error: could not determine executable path:", err)
+		return
+	}
+
+	cmd := exec.Command(binary, "monitor")
+	// Detach from the current process group so the monitor survives if the
+	// dashboard exits, and doesn't receive signals sent to the terminal.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Do not inherit stdin/stdout/stderr – it's a daemon.
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		fmt.Println("Error starting monitor:", err)
+		return
+	}
+	// Detach from the child so we don't wait for it.
+	_ = cmd.Process.Release()
+
+	// Poll up to 3 seconds for the PID file to confirm the monitor started.
+	fmt.Print("Starting monitor")
+	for i := 0; i < 6; i++ {
+		time.Sleep(500 * time.Millisecond)
+		fmt.Print(".")
+		sm, err := state.NewManager()
+		if err == nil && sm.Load() == nil && sm.GetPID() != 0 {
+			fmt.Println(" started! (PID:", sm.GetPID(), ")")
+			return
+		}
+	}
+	fmt.Println(" (monitor may still be starting up)")
 }
 
 func waitForEnter() {
