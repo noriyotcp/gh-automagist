@@ -38,6 +38,8 @@ func runListInteractive() (bool, error) {
 	}
 
 	for {
+		clearScreen()
+		renderCompactHeader()
 		var options []huh.Option[string]
 		options = append(options, huh.NewOption("← Back to Dashboard", "__back__"))
 		for path, info := range sm.Files {
@@ -74,6 +76,8 @@ func runListInteractive() (bool, error) {
 
 		// Inner loop: stay on the action menu for this file until a definitive action or cancel
 		for {
+			clearScreen()
+			renderCompactHeader()
 			var action string
 			actionForm := huh.NewForm(
 				huh.NewGroup(
@@ -103,7 +107,8 @@ func runListInteractive() (bool, error) {
 				cm.Stdout = os.Stdout
 				cm.Stderr = os.Stderr
 				_ = cm.Run()
-				// After editing, return to this action menu
+				// After editing, clear screen and return to this action menu
+				clearScreen()
 				continue
 			case "view":
 				cm := exec.Command("gh", "gist", "view", gistID)
@@ -111,7 +116,8 @@ func runListInteractive() (bool, error) {
 				cm.Stdout = os.Stdout
 				cm.Stderr = os.Stderr
 				_ = cm.Run()
-				// After viewing, return to this action menu
+				// After viewing, clear screen and return to this action menu
+				clearScreen()
 				continue
 			case "cancel":
 				// Back to file list

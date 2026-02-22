@@ -84,11 +84,6 @@ func runDashboard() {
 	}
 }
 
-func clearScreen() {
-	// ANSI escape sequence to clear screen and move cursor to top-left
-	fmt.Print("\033[H\033[2J")
-}
-
 func renderHeader() {
 	art := `
    ██████╗ ██╗  ██╗     █████╗ ██╗   ██╗████████╗ ██████╗ ███╗   ███╗ █████╗  ██████╗ ██╗███████╗████████╗
