@@ -72,44 +72,49 @@ func runListInteractive() (bool, error) {
 		path := parts[0]
 		gistID := parts[1]
 
-		var action string
-		actionForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title(fmt.Sprintf("Select action for: %s", filepath.Base(path))).
-					Options(
-						huh.NewOption("Edit in $EDITOR", "edit"),
-						huh.NewOption("View Gist", "view"),
-						huh.NewOption("Cancel", "cancel"),
-					).
-					Value(&action),
-			),
-		)
+		// Inner loop: stay on the action menu for this file until a definitive action or cancel
+		for {
+			var action string
+			actionForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title(fmt.Sprintf("Select action for: %s", filepath.Base(path))).
+						Options(
+							huh.NewOption("Edit in $EDITOR", "edit"),
+							huh.NewOption("View Gist", "view"),
+							huh.NewOption("← Back to File List", "cancel"),
+						).
+						Value(&action),
+				),
+			)
 
-		if err := actionForm.Run(); err != nil {
-			return false, err
-		}
-
-		switch action {
-		case "edit":
-			editor := os.Getenv("EDITOR")
-			if editor == "" {
-				editor = "vim"
+			if err := actionForm.Run(); err != nil {
+				return false, err
 			}
-			cm := exec.Command(editor, path)
-			cm.Stdin = os.Stdin
-			cm.Stdout = os.Stdout
-			cm.Stderr = os.Stderr
-			return false, cm.Run()
-		case "view":
-			cm := exec.Command("gh", "gist", "view", gistID)
-			cm.Stdin = os.Stdin
-			cm.Stdout = os.Stdout
-			cm.Stderr = os.Stderr
-			return false, cm.Run()
-		case "cancel":
-			// Back to file list
-			continue
+
+			switch action {
+			case "edit":
+				editor := os.Getenv("EDITOR")
+				if editor == "" {
+					editor = "vim"
+				}
+				cm := exec.Command(editor, path)
+				cm.Stdin = os.Stdin
+				cm.Stdout = os.Stdout
+				cm.Stderr = os.Stderr
+				return false, cm.Run()
+			case "view":
+				cm := exec.Command("gh", "gist", "view", gistID)
+				cm.Stdin = os.Stdin
+				cm.Stdout = os.Stdout
+				cm.Stderr = os.Stderr
+				_ = cm.Run()
+				// After viewing, return to this action menu
+				continue
+			case "cancel":
+				// Back to file list
+			}
+			break
 		}
 	}
 }
