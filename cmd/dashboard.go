@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -147,12 +148,7 @@ func runDashboardAddInteraction() bool {
 	// Step 1: File selection
 	clearScreen()
 	renderCompactHeader()
-	var filePath string
-	err := huh.NewFilePicker().
-		Title("Step 1/2 – Select file to add (esc to cancel):").
-		CurrentDirectory(homeDir()).
-		Value(&filePath).
-		Run()
+	filePath, err := runFilteredFileBrowser(homeDir())
 	if err != nil || filePath == "" {
 		return true
 	}
@@ -251,6 +247,64 @@ func runDashboardRemoveInteraction() bool {
 
 	_ = removeCmd.RunE(removeCmd, []string{selectedPath})
 	return false
+}
+
+// runFilteredFileBrowser provides a searchable file browser using huh.Select.
+func runFilteredFileBrowser(startDir string) (string, error) {
+	currentDir := startDir
+	for {
+		entries, err := os.ReadDir(currentDir)
+		if err != nil {
+			return "", err
+		}
+
+		var options []huh.Option[string]
+		options = append(options, huh.NewOption(".. (Up)", ".."))
+
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue // Skip hidden files for cleaner UI
+			}
+			label := name
+			if entry.IsDir() {
+				label += "/"
+			}
+			options = append(options, huh.NewOption(label, name))
+		}
+
+		var selected string
+		clearScreen()
+		renderCompactHeader()
+		err = huh.NewSelect[string]().
+			Title(fmt.Sprintf("Directory: %s\n(Filter: /  Select: Enter  Cancel: Esc)", strings.Replace(currentDir, homeDir(), "~", 1))).
+			Options(options...).
+			Value(&selected).
+			Filtering(true).
+			Run()
+
+		if err != nil {
+			return "", err // User cancelled
+		}
+
+		if selected == ".." {
+			currentDir = filepath.Dir(currentDir)
+			continue
+		}
+
+		fullPath := filepath.Join(currentDir, selected)
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			continue
+		}
+
+		if info.IsDir() {
+			currentDir = fullPath
+			continue
+		}
+
+		return fullPath, nil
+	}
 }
 
 // homeDir returns the user's home directory path.
