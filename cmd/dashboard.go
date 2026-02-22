@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var dashboardCmd = &cobra.Command{
@@ -90,6 +91,12 @@ func runDashboard() {
 }
 
 func renderHeader() {
+	// Fall back to compact header on narrow terminals to prevent wrapping
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w < 110 {
+		renderCompactHeader()
+		return
+	}
+
 	art := `
    ██████╗ ██╗  ██╗     █████╗ ██╗   ██╗████████╗ ██████╗ ███╗   ███╗ █████╗  ██████╗ ██╗███████╗████████╗
   ██╔════╝ ██║  ██║    ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗████╗ ████║██╔══██╗██╔════╝ ██║██╔════╝╚══██╔══╝
