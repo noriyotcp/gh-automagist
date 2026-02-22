@@ -144,12 +144,13 @@ func renderHeader() {
 // runDashboardAddInteraction is a multi-step wizard for adding a file to monitor.
 // Returns true if the user cancelled at any step.
 func runDashboardAddInteraction() bool {
-	// Step 1: File path
+	// Step 1: File selection
 	clearScreen()
 	renderCompactHeader()
 	var filePath string
-	err := huh.NewInput().
-		Title("Step 1/2 – Enter file path to add (empty to cancel):").
+	err := huh.NewFilePicker().
+		Title("Step 1/2 – Select file to add (esc to cancel):").
+		CurrentDirectory(homeDir()).
 		Value(&filePath).
 		Run()
 	if err != nil || filePath == "" {
