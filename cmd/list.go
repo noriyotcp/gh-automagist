@@ -102,7 +102,9 @@ func runListInteractive() (bool, error) {
 				cm.Stdin = os.Stdin
 				cm.Stdout = os.Stdout
 				cm.Stderr = os.Stderr
-				return false, cm.Run()
+				_ = cm.Run()
+				// After editing, return to this action menu
+				continue
 			case "view":
 				cm := exec.Command("gh", "gist", "view", gistID)
 				cm.Stdin = os.Stdin
