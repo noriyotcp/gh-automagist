@@ -65,9 +65,13 @@ func runDashboard() {
 			backedOut, err = runListInteractive()
 			_ = err
 		case "add":
-			runDashboardAddInteraction()
+			if runDashboardAddInteraction() {
+				backedOut = true
+			}
 		case "remove":
-			runDashboardRemoveInteraction()
+			if runDashboardRemoveInteraction() {
+				backedOut = true
+			}
 		case "start":
 			_ = monitorCmd.RunE(monitorCmd, []string{})
 		case "stop":
@@ -125,31 +129,42 @@ func renderHeader() {
 	fmt.Println(statusStyle.Render(fmt.Sprintf("  Monitor: %s%s\n", statusText, pidText)))
 }
 
-// Helper to ask the user a quick input during the dashboard loop
-func runDashboardAddInteraction() {
+// runDashboardAddInteraction shows the compact header then prompts for a file
+// path to add. Returns true if the user cancelled (Ctrl+C or empty input),
+// meaning the caller should skip waitForEnter and go straight back to the menu.
+func runDashboardAddInteraction() bool {
+	clearScreen()
+	renderCompactHeader()
 	var filePath string
 	err := huh.NewInput().
-		Title("Enter file path to add:").
+		Title("Enter file path to add (empty to cancel):").
 		Value(&filePath).
 		Run()
 
-	if err == nil && filePath != "" {
-		// Call Add with args instead of Run
-		addCmd.Run(addCmd, []string{filePath})
+	// Ctrl+C returns an error; empty input means the user wants to go back
+	if err != nil || filePath == "" {
+		return true
 	}
+	_ = addCmd.RunE(addCmd, []string{filePath})
+	return false
 }
 
-func runDashboardRemoveInteraction() {
+// runDashboardRemoveInteraction shows the compact header then prompts for a
+// file path to remove. Returns true if the user cancelled.
+func runDashboardRemoveInteraction() bool {
+	clearScreen()
+	renderCompactHeader()
 	var filePath string
 	err := huh.NewInput().
-		Title("Enter file path to remove:").
+		Title("Enter file path to remove (empty to cancel):").
 		Value(&filePath).
 		Run()
 
-	if err == nil && filePath != "" {
-		// Call Remove with args instead of Run
-		removeCmd.Run(removeCmd, []string{filePath})
+	if err != nil || filePath == "" {
+		return true
 	}
+	_ = removeCmd.RunE(removeCmd, []string{filePath})
+	return false
 }
 
 func waitForEnter() {
