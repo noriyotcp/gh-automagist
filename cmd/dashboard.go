@@ -2,8 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"os/exec"
+	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/spf13/cobra"
 )
 
@@ -24,11 +28,13 @@ func runDashboard() {
 	for {
 		var action string
 
+		clearScreen()
+		renderHeader()
+
 		// Create the selection menu
 		form := huh.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
-					Title("gh-automagist Dashboard").
 					Options(
 						huh.NewOption("Status (Check Monitor)", "status"),
 						huh.NewOption("List Monitored Files", "list"),
@@ -73,6 +79,52 @@ func runDashboard() {
 			waitForEnter()
 		}
 	}
+}
+
+func clearScreen() {
+	// ANSI escape sequence to clear screen and move cursor to top-left
+	fmt.Print("\033[H\033[2J")
+}
+
+func renderHeader() {
+	art := `
+   ██████╗ ██╗  ██╗     █████╗ ██╗   ██╗████████╗ ██████╗ ███╗   ███╗ █████╗  ██████╗ ██╗███████╗████████╗
+  ██╔════╝ ██║  ██║    ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗████╗ ████║██╔══██╗██╔════╝ ██║██╔════╝╚══██╔══╝
+  ██║  ███╗███████║    ███████║██║   ██║   ██║   ██║   ██║██╔████╔██║███████║██║  ███╗██║███████╗   ██║
+  ██║   ██║██╔══██║    ██╔══██║██║   ██║   ██║   ██║   ██║██║╚██╔╝██║██╔══██║██║   ██║██║╚════██║   ██║
+  ╚██████╔╝██║  ██║    ██║  ██║╚██████╔╝   ██║   ╚██████╔╝██║ ╚═╝ ██║██║  ██║╚██████╔╝██║███████║   ██║
+   ╚═════╝ ╚═╝  ╚═╝    ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝╚══════╝   ╚═╝
+`
+
+	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
+	fmt.Println(headerStyle.Render(art))
+
+	// Status detection
+	sm, err := state.NewManager()
+	statusText := "○ STOPPED"
+	statusColor := "8" // Grey
+	pidText := ""
+
+	if err == nil && sm.Load() == nil {
+		pid := sm.GetPID()
+		if pid != 0 {
+			out, err := exec.Command("ps", "-o", "state=", "-p", fmt.Sprintf("%d", pid)).Output()
+			if err == nil && len(out) > 0 {
+				stateStr := strings.TrimSpace(string(out))
+				if strings.HasPrefix(stateStr, "T") {
+					statusText = "◐ SUSPENDED"
+					statusColor = "3" // Yellow
+				} else {
+					statusText = "● RUNNING"
+					statusColor = "2" // Green
+				}
+				pidText = fmt.Sprintf(" (PID: %d)", pid)
+			}
+		}
+	}
+
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Bold(true)
+	fmt.Println(statusStyle.Render(fmt.Sprintf("  Monitor: %s%s\n", statusText, pidText)))
 }
 
 // Helper to ask the user a quick input during the dashboard loop
