@@ -41,7 +41,7 @@ func runListInteractive() (bool, error) {
 		clearScreen()
 		renderCompactHeader()
 		var options []huh.Option[string]
-		options = append(options, huh.NewOption("← Back to Dashboard", "__back__"))
+		options = append(options, huh.NewOption("← Back", "__back__"))
 		for path, info := range sm.Files {
 			label := fmt.Sprintf("%s | %s", path, info.GistID)
 			options = append(options, huh.NewOption(label, label))
