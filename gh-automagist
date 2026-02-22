@@ -1,0 +1,17 @@
+#!/bin/bash -e
+
+# This wrapper script is a fallback mechanism for GitHub CLI extensions.
+# When a user installs the extension via `gh ext install noriyo_tcp/gh-automagist`,
+# the `gh` CLI attempts to download the pre-compiled binary from GitHub Releases first.
+# If a matching Release binary is NOT found, it falls back to cloning this repository
+# and executing this script. This script then compiles the Go binary from source locally.
+
+rootPath="$(dirname "$0")"
+
+if ! type -p go >/dev/null; then
+  echo "Go not found on the system. Please install Go to build from source." >&2
+  exit 1
+fi
+
+(cd "$rootPath" && go build -o gh-automagist.out)
+exec "$rootPath/gh-automagist.out" "$@"
