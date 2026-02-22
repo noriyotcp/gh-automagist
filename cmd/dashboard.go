@@ -261,6 +261,11 @@ func homeDir() string {
 // startMonitorInBackground launches the monitor as a detached background
 // process using the current binary, so the dashboard is not blocked.
 func startMonitorInBackground() {
+	if isMonitorRunning() {
+		fmt.Println("Monitor is already running.")
+		return
+	}
+
 	binary, err := os.Executable()
 	if err != nil {
 		fmt.Println("Error: could not determine executable path:", err)

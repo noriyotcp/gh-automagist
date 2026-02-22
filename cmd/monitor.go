@@ -21,6 +21,12 @@ var monitorCmd = &cobra.Command{
 	Use:   "monitor",
 	Short: "Start monitoring files defined in state.json and sync them to GitHub Gists",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Prevent double-starting regardless of mode (daemon or foreground)
+		if isMonitorRunning() {
+			fmt.Println("Monitor is already running.")
+			return nil
+		}
+
 		// --daemon: re-launch self without the flag as a detached background process
 		if daemonMode {
 			binary, err := os.Executable()

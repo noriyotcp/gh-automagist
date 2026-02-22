@@ -14,6 +14,27 @@ func clearScreen() {
 	fmt.Print("\033[H\033[2J")
 }
 
+// isMonitorRunning returns true if a monitor process with the stored PID is
+// currently alive. Used to prevent double-starting the monitor.
+func isMonitorRunning() bool {
+	sm, err := state.NewManager()
+	if err != nil {
+		return false
+	}
+	if sm.Load() != nil {
+		return false
+	}
+	pid := sm.GetPID()
+	if pid == 0 {
+		return false
+	}
+	out, err := exec.Command("ps", "-o", "state=", "-p", fmt.Sprintf("%d", pid)).Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		return false
+	}
+	return true
+}
+
 // renderCompactHeader renders a compact one-line status bar for sub-screens.
 // The full ASCII art header is only shown on the main dashboard screen.
 func renderCompactHeader() {
