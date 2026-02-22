@@ -20,6 +20,7 @@ type FileState struct {
 type Manager struct {
 	configDir string
 	statePath string
+	pidPath   string
 	Files     map[string]FileState
 }
 
@@ -32,10 +33,12 @@ func NewManager() (*Manager, error) {
 
 	configDir := filepath.Join(homeDir, ".config", "gh-automagist")
 	statePath := filepath.Join(configDir, "state.json")
+	pidPath := filepath.Join(configDir, "monitor.pid")
 
 	return &Manager{
 		configDir: configDir,
 		statePath: statePath,
+		pidPath:   pidPath,
 		Files:     make(map[string]FileState),
 	}, nil
 }
@@ -96,4 +99,30 @@ func (m *Manager) AddTrackedFile(absPath, gistID string, updatedAt int64) {
 // RemoveTrackedFile stops monitoring a file.
 func (m *Manager) RemoveTrackedFile(absPath string) {
 	delete(m.Files, absPath)
+}
+
+// WritePID writes the current process ID to monitor.pid.
+func (m *Manager) WritePID() error {
+	pid := os.Getpid()
+	return os.WriteFile(m.pidPath, []byte(fmt.Sprintf("%d", pid)), 0644)
+}
+
+// DeletePID removes the monitor.pid file.
+func (m *Manager) DeletePID() error {
+	err := os.Remove(m.pidPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// GetPID reads the PID from the monitor.pid file. returns 0 if not found.
+func (m *Manager) GetPID() int {
+	data, err := os.ReadFile(m.pidPath)
+	if err != nil {
+		return 0
+	}
+	var pid int
+	fmt.Sscanf(string(data), "%d", &pid)
+	return pid
 }

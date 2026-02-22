@@ -2,25 +2,55 @@ package cmd
 
 import (
 	"fmt"
+	"os/exec"
+	"strings"
 
-	"github.com/cli/go-gh/v2"
+	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/spf13/cobra"
 )
 
-// statusCmd represents the status command
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Check the authentication status with GitHub",
+	Short: "Show monitor process status and currently monitored files",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Checking GitHub CLI authentication status...")
-
-		// Execute the official GitHub CLI command: `gh auth status`
-		stdout, stderr, err := gh.Exec("auth", "status")
+		sm, err := state.NewManager()
 		if err != nil {
-			return fmt.Errorf("failed to check auth status: %v\n%s", err, stderr.String())
+			return err
+		}
+		if err := sm.Load(); err != nil {
+			return err
 		}
 
-		fmt.Println(stdout.String())
+		pid := sm.GetPID()
+		if pid == 0 {
+			fmt.Println("Monitor Status: STOPPED")
+		} else {
+			// Check process state using ps (macOS/Linux compatible)
+			out, err := exec.Command("ps", "-o", "state=", "-p", fmt.Sprintf("%d", pid)).Output()
+			if err != nil || len(out) == 0 {
+				fmt.Println("Monitor Status: STOPPED")
+			} else {
+				stateStr := strings.TrimSpace(string(out))
+				if strings.HasPrefix(stateStr, "T") {
+					fmt.Printf("Monitor Status: SUSPENDED (PID: %d)\n", pid)
+				} else {
+					fmt.Printf("Monitor Status: RUNNING (PID: %d)\n", pid)
+				}
+			}
+		}
+
+		fmt.Println()
+
+		if len(sm.Files) == 0 {
+			fmt.Println("No files registered.")
+			return nil
+		}
+
+		fmt.Printf("Registered Files (%d):\n", len(sm.Files))
+		for path, info := range sm.Files {
+			fmt.Printf("- %s (Gist ID: %s)\n", path, info.GistID)
+		}
+
 		return nil
 	},
 }
