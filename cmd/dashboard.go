@@ -56,11 +56,14 @@ func runDashboard() {
 		}
 
 		// Execute the chosen action
+		backedOut := false
 		switch action {
 		case "status":
 			_ = statusCmd.RunE(statusCmd, []string{})
 		case "list":
-			_ = listCmd.RunE(listCmd, []string{})
+			var err error
+			backedOut, err = runListInteractive()
+			_ = err
 		case "add":
 			runDashboardAddInteraction()
 		case "remove":
@@ -74,8 +77,8 @@ func runDashboard() {
 			return
 		}
 
-		// Wait before looping back if the action wasn't Exit
-		if action != "exit" {
+		// Wait before looping back, unless the user just backed out of a submenu
+		if !backedOut {
 			waitForEnter()
 		}
 	}
