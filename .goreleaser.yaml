@@ -22,3 +22,5 @@ snapshot:
   version_template: "{{ incpatch .Version }}-next"
 changelog:
   use: github-native
+release:
+  draft: true
