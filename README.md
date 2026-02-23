@@ -8,7 +8,10 @@ It's designed to run silently in the background, treating your local environment
 - **Daemonized File Watcher**: Runs silently in the background. Tracks `.config/gh-automagist/state.json`.
 - **Instant Synchronization**: Detects file saves instantly via `fsnotify` and pushes changes directly to your Gists.
 - **Interactive UI**: Includes an intuitive TUI built with Charmbracelet `huh` to manage your tracked files.
-- **Zero Dependencies**: Distributed as a single compiled Go binary. No Ruby, no external gems needed.
+
+## Supported OS
+
+Currently, `gh-automagist` officially supports **macOS** and **Linux**. Windows is not supported at this time due to background daemon technicalities.
 
 ## Installation
 
@@ -35,7 +38,7 @@ gh extension install noriyotcp/gh-automagist
 If you wish to compile the extension yourself:
 
 ```bash
-git clone https://github.com/noriyo_tcp/gh-automagist.git
+git clone https://github.com/noriyotcp/gh-automagist.git
 cd gh-automagist
 go build -o gh-automagist
 ```
