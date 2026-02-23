@@ -15,7 +15,7 @@ builds:
       - arm64
 archives:
   - format: binary
-    name_template: "{{ .Os }}-{{ .Arch }}"
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
 checksum:
   name_template: 'checksums.txt'
 snapshot:
