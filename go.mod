@@ -3,7 +3,7 @@ module github.com/noriyo_tcp/gh-automagist
 go 1.25.4
 
 require (
-	github.com/charmbracelet/huh v0.8.0
+	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250319133953-166f707985bc
 	github.com/cli/go-gh/v2 v2.13.0
 	github.com/fsnotify/fsnotify v1.9.0
