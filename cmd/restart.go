@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/spf13/cobra"
@@ -23,13 +22,15 @@ var restartCmd = &cobra.Command{
 		}
 
 		if pid := sm.GetPID(); pid != 0 {
-			process, _ := os.FindProcess(pid)
-			if err := process.Kill(); err != nil {
-				fmt.Printf("Note: monitor was not actually running (stale PID file for %d)\n", pid)
-			} else {
-				fmt.Printf("Stopped monitor (PID: %d)\n", pid)
+			killed, err := sm.KillMonitor(pid)
+			if err != nil {
+				return err
 			}
-			sm.DeletePID()
+			if killed {
+				fmt.Printf("Stopped monitor (PID: %d)\n", pid)
+			} else {
+				fmt.Printf("Note: monitor was not actually running (stale PID file for %d, cleaned up)\n", pid)
+			}
 		} else {
 			fmt.Println("Monitor was not running; starting fresh.")
 		}

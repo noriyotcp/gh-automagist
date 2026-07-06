@@ -1,7 +1,9 @@
 package state
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -64,6 +66,42 @@ func TestManager_LoadAndSaveParity(t *testing.T) {
 	assert.Equal(t, "abcdef123456", loadedState.GistID)
 	assert.Equal(t, currentTime, loadedState.UpdatedAt)
 	assert.Equal(t, "active", loadedState.Status)
+}
+
+func TestKillMonitor_StalePID(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(m.configDir, 0755))
+
+	// PID that is virtually guaranteed not to exist.
+	stalePID := 99999999
+	require.NoError(t, os.WriteFile(m.pidPath, []byte(fmt.Sprintf("%d", stalePID)), 0644))
+
+	killed, err := m.KillMonitor(stalePID)
+	assert.NoError(t, err)
+	assert.False(t, killed, "stale PID should not be reported as killed")
+	assert.Equal(t, 0, m.GetPID(), "PID file should be cleaned up after stale detection")
+}
+
+func TestKillMonitor_LiveProcess(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(m.configDir, 0755))
+
+	// Spawn a real subprocess we can safely kill.
+	cmd := exec.Command("sleep", "30")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Wait() }) // reap zombie
+
+	pid := cmd.Process.Pid
+	require.NoError(t, os.WriteFile(m.pidPath, []byte(fmt.Sprintf("%d", pid)), 0644))
+
+	killed, err := m.KillMonitor(pid)
+	assert.NoError(t, err)
+	assert.True(t, killed, "live process should be reported as killed")
+	assert.Equal(t, 0, m.GetPID(), "PID file should be cleaned up after successful kill")
 }
 
 func TestManager_RemoveTrackedFile(t *testing.T) {
