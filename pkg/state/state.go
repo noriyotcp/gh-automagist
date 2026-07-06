@@ -2,9 +2,11 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // FileState represents the synchronization state of a single monitored file.
@@ -114,6 +116,30 @@ func (m *Manager) DeletePID() error {
 		return err
 	}
 	return nil
+}
+
+// KillMonitor sends SIGKILL to the given pid and clears the PID file.
+//
+// Returns:
+//   - (true, nil) if the process was killed cleanly
+//   - (false, nil) if the process was already gone (stale PID file, cleaned up)
+//   - (false, err) on real Kill failures (e.g. EPERM). The PID file is NOT cleaned up
+//     in this case, because the recorded process may still be alive.
+//
+// Callers should check GetPID() != 0 before calling.
+func (m *Manager) KillMonitor(pid int) (killed bool, err error) {
+	process, _ := os.FindProcess(pid) // Unix: always succeeds regardless of process existence
+	killErr := process.Kill()
+	switch {
+	case killErr == nil:
+		m.DeletePID()
+		return true, nil
+	case errors.Is(killErr, os.ErrProcessDone) || errors.Is(killErr, syscall.ESRCH):
+		m.DeletePID()
+		return false, nil
+	default:
+		return false, fmt.Errorf("failed to kill monitor (PID %d): %w", pid, killErr)
+	}
 }
 
 // GetPID reads the PID from the monitor.pid file. returns 0 if not found.

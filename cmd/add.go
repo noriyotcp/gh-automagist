@@ -70,7 +70,7 @@ var addCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Added %s to monitor (Gist ID: %s)\n", absPath, finalGistID)
-		fmt.Println("Note: If 'gh-automagist monitor' is running, please restart it to pick up the new file.")
+		fmt.Println("Note: If 'gh-automagist monitor' is running, run 'gh automagist restart' to pick up the new file.")
 
 		return nil
 	},

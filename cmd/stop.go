@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/spf13/cobra"
@@ -26,21 +25,16 @@ var stopCmd = &cobra.Command{
 			return nil
 		}
 
-		process, err := os.FindProcess(pid)
-		if err != nil {
-			fmt.Printf("Monitor process %d not found (stale PID file?)\n", pid)
-			sm.DeletePID()
-			return nil
-		}
-
-		err = process.Kill()
+		killed, err := sm.KillMonitor(pid)
 		if err != nil {
 			fmt.Printf("Failed to stop monitor: %v\n", err)
 			return err
 		}
-
-		fmt.Printf("Stopped monitor (PID: %d)\n", pid)
-		sm.DeletePID()
+		if killed {
+			fmt.Printf("Stopped monitor (PID: %d)\n", pid)
+		} else {
+			fmt.Printf("Monitor process %d was not running (stale PID file, cleaned up)\n", pid)
+		}
 		return nil
 	},
 }
