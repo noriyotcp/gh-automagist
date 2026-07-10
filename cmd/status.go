@@ -25,7 +25,6 @@ var statusCmd = &cobra.Command{
 		if pid == 0 {
 			fmt.Println("Monitor Status: STOPPED")
 		} else {
-			// Check process state using ps (macOS/Linux compatible)
 			out, err := exec.Command("ps", "-o", "state=", "-p", fmt.Sprintf("%d", pid)).Output()
 			if err != nil || len(out) == 0 {
 				fmt.Println("Monitor Status: STOPPED")

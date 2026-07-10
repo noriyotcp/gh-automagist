@@ -15,7 +15,7 @@ import (
 // fires, so rapid successive writes to the same file collapse into a single sync.
 const DefaultDebounceInterval = 1 * time.Second
 
-// Watcher wraps fsnotify to specifically track changes to files defined in the local state.
+// Watcher watches the parent directories of tracked files and calls OnChange on write.
 type Watcher struct {
 	watcher      *fsnotify.Watcher
 	stateManager *state.Manager
@@ -35,7 +35,6 @@ type debounceEntry struct {
 	gistID string
 }
 
-// NewWatcher initializes the file system watcher based on the provided state manager.
 func NewWatcher(sm *state.Manager) (*Watcher, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -51,7 +50,7 @@ func NewWatcher(sm *state.Manager) (*Watcher, error) {
 	}, nil
 }
 
-// Start begins processing watcher events in a blocking manner until Stop() is called.
+// Start runs the event loop; blocks until Stop().
 func (w *Watcher) Start() error {
 	// 1. Add all directories containing tracked files to the watcher
 	// fsnotify works best by watching the parent directory to catch vim/editor "save by replace" events.
@@ -87,11 +86,9 @@ func (w *Watcher) Start() error {
 
 			// We are only interested in Write or Create events (editors sometimes Create/Rename instead of Write)
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				// Check if the modified file is actually one of our strictly tracked files
 				if fileState, isTracked := w.stateManager.Files[event.Name]; isTracked {
 					log.Printf("[Sync] Change detected in %s", filepath.Base(event.Name))
 
-					// Update state modification time locally
 					fileState.UpdatedAt = time.Now().Unix()
 					w.stateManager.Files[event.Name] = fileState
 					w.stateManager.Save() // Persist immediately

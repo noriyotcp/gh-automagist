@@ -21,12 +21,10 @@ func TestWatcher_DetectsFileChange(t *testing.T) {
 	sm, err := state.NewManager()
 	require.NoError(t, err)
 
-	// Create a mock file to monitor
 	targetFile := filepath.Join(tempDir, "test_config.txt")
 	err = os.WriteFile(targetFile, []byte("initial data"), 0644)
 	require.NoError(t, err)
 
-	// Register it in our state manager
 	sm.AddTrackedFile(targetFile, "github_gist_123", time.Now().Unix())
 	sm.Save() // persist so watch loop is aware
 

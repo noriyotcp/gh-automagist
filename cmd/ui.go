@@ -9,13 +9,11 @@ import (
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 )
 
-// clearScreen clears the terminal using ANSI escape sequences.
 func clearScreen() {
 	fmt.Print("\033[H\033[2J")
 }
 
-// isMonitorRunning returns true if a monitor process with the stored PID is
-// currently alive. Used to prevent double-starting the monitor.
+// isMonitorRunning reports whether the PID file's process is alive.
 func isMonitorRunning() bool {
 	sm, err := state.NewManager()
 	if err != nil {
@@ -35,8 +33,7 @@ func isMonitorRunning() bool {
 	return true
 }
 
-// renderCompactHeader renders a compact one-line status bar for sub-screens.
-// The full ASCII art header is only shown on the main dashboard screen.
+// renderCompactHeader draws the sub-screen status bar.
 func renderCompactHeader() {
 	appStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
 	app := appStyle.Render("gh-automagist")

@@ -7,20 +7,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "automagist",
 	Short: "Automagically sync local files to GitHub Gists",
 	Long: `gh-automagist is an extension for the GitHub CLI that watches local files
 and automatically synchronizes their changes seamlessly to GitHub Gists.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// By default, show help if no explicit subcommand is passed
+		// No subcommand → show help.
 		cmd.Help()
 	},
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	// Create a dummy gh command to ensure cobra generates usage like "gh automagist [command]"
 	ghCmd := &cobra.Command{
