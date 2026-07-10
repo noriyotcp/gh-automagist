@@ -4,11 +4,16 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 )
+
+// DefaultDebounceInterval is the quiet-window after the last write before OnChange
+// fires, so rapid successive writes to the same file collapse into a single sync.
+const DefaultDebounceInterval = 1 * time.Second
 
 // Watcher wraps fsnotify to specifically track changes to files defined in the local state.
 type Watcher struct {
@@ -16,6 +21,18 @@ type Watcher struct {
 	stateManager *state.Manager
 	OnChange     func(absPath string, gistID string) // Callback when a watched file changes
 	done         chan bool
+
+	// DebounceInterval overrides DefaultDebounceInterval; must be set before Start().
+	// A zero or negative value disables debouncing.
+	DebounceInterval time.Duration
+
+	timersMu sync.Mutex
+	timers   map[string]*debounceEntry
+}
+
+type debounceEntry struct {
+	timer  *time.Timer
+	gistID string
 }
 
 // NewWatcher initializes the file system watcher based on the provided state manager.
@@ -26,9 +43,11 @@ func NewWatcher(sm *state.Manager) (*Watcher, error) {
 	}
 
 	return &Watcher{
-		watcher:      w,
-		stateManager: sm,
-		done:         make(chan bool),
+		watcher:          w,
+		stateManager:     sm,
+		done:             make(chan bool),
+		DebounceInterval: DefaultDebounceInterval,
+		timers:           make(map[string]*debounceEntry),
 	}, nil
 }
 
@@ -70,10 +89,6 @@ func (w *Watcher) Start() error {
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
 				// Check if the modified file is actually one of our strictly tracked files
 				if fileState, isTracked := w.stateManager.Files[event.Name]; isTracked {
-					// To prevent event spamming (compilers/editors writing multiple times super fast),
-					// we enforce a basic debounce/throttle. We only trigger if it's been updated.
-					// A more robust implementation would use a timer, but this is a simple start.
-
 					log.Printf("[Sync] Change detected in %s", filepath.Base(event.Name))
 
 					// Update state modification time locally
@@ -81,10 +96,7 @@ func (w *Watcher) Start() error {
 					w.stateManager.Files[event.Name] = fileState
 					w.stateManager.Save() // Persist immediately
 
-					// Trigger callback for the main app to handle Github Sync
-					if w.OnChange != nil {
-						w.OnChange(event.Name, fileState.GistID)
-					}
+					w.scheduleSync(event.Name, fileState.GistID)
 				}
 			}
 
@@ -101,8 +113,63 @@ func (w *Watcher) Start() error {
 	}
 }
 
-// Stop gracefully shuts down the file watcher.
+// scheduleSync arms (or resets) the per-file debounce timer. gistID is captured
+// in the timer's closure so the AfterFunc callback never touches stateManager.Files
+// concurrently with the Start() event loop.
+func (w *Watcher) scheduleSync(absPath, gistID string) {
+	if w.DebounceInterval <= 0 {
+		if w.OnChange != nil {
+			w.OnChange(absPath, gistID)
+		}
+		return
+	}
+
+	w.timersMu.Lock()
+	defer w.timersMu.Unlock()
+
+	if entry, ok := w.timers[absPath]; ok {
+		entry.timer.Stop()
+	}
+	w.timers[absPath] = &debounceEntry{
+		gistID: gistID,
+		timer: time.AfterFunc(w.DebounceInterval, func() {
+			w.timersMu.Lock()
+			delete(w.timers, absPath)
+			w.timersMu.Unlock()
+
+			if w.OnChange != nil {
+				w.OnChange(absPath, gistID)
+			}
+		}),
+	}
+}
+
+// Stop gracefully shuts down the file watcher. Pending debounced syncs are
+// flushed synchronously so the final edit is not lost on shutdown.
 func (w *Watcher) Stop() {
 	close(w.done)
 	w.watcher.Close()
+	w.flushPendingSyncs()
+}
+
+// flushPendingSyncs cancels armed debounce timers and fires OnChange for each.
+// Timers whose AfterFunc is already running or enqueued are left alone — the
+// callback will invoke OnChange itself.
+func (w *Watcher) flushPendingSyncs() {
+	w.timersMu.Lock()
+	pending := make(map[string]string, len(w.timers))
+	for absPath, entry := range w.timers {
+		if !entry.timer.Stop() {
+			continue // already fired or firing; the AfterFunc callback handles it
+		}
+		pending[absPath] = entry.gistID
+	}
+	w.timers = make(map[string]*debounceEntry)
+	w.timersMu.Unlock()
+
+	for absPath, gistID := range pending {
+		if w.OnChange != nil {
+			w.OnChange(absPath, gistID)
+		}
+	}
 }

@@ -1,8 +1,10 @@
 package monitor
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,9 +33,11 @@ func TestWatcher_DetectsFileChange(t *testing.T) {
 	// 2. Initialize the Watcher
 	w, err := NewWatcher(sm)
 	require.NoError(t, err)
+	// Shorten the debounce so the test doesn't wait a full second for the sync.
+	w.DebounceInterval = 50 * time.Millisecond
 
 	// 3. Setup the callback channel to intercept the change event asynchronously
-	changeDetected := make(chan string)
+	changeDetected := make(chan string, 1)
 	w.OnChange = func(absPath string, gistID string) {
 		assert.Equal(t, targetFile, absPath)
 		assert.Equal(t, "github_gist_123", gistID)
@@ -59,5 +63,81 @@ func TestWatcher_DetectsFileChange(t *testing.T) {
 		assert.Equal(t, targetFile, changedPath)
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout: Watcher failed to detect file modification within 2 seconds")
+	}
+}
+
+func TestWatcher_ScheduleSync_DebouncesRapidCalls(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	sm, err := state.NewManager()
+	require.NoError(t, err)
+
+	w, err := NewWatcher(sm)
+	require.NoError(t, err)
+	w.DebounceInterval = 100 * time.Millisecond
+
+	var count atomic.Int32
+	fired := make(chan string, 4)
+	w.OnChange = func(absPath, gistID string) {
+		count.Add(1)
+		fired <- gistID
+	}
+
+	const absPath = "/fake/rapid.txt"
+	for i := 1; i <= 3; i++ {
+		w.scheduleSync(absPath, fmt.Sprintf("gist_v%d", i))
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	select {
+	case gotGistID := <-fired:
+		assert.Equal(t, "gist_v3", gotGistID)
+	case <-time.After(1 * time.Second):
+		t.Fatal("OnChange did not fire within 1s of the final scheduleSync")
+	}
+
+	// Give a generous window for any spurious extra fires to appear.
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, int32(1), count.Load(), "expected exactly one OnChange for 3 rapid scheduleSync calls")
+}
+
+func TestWatcher_StopFlushesPendingSyncs(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	sm, err := state.NewManager()
+	require.NoError(t, err)
+
+	w, err := NewWatcher(sm)
+	require.NoError(t, err)
+	// Long enough that the timer will NOT fire naturally within the test.
+	w.DebounceInterval = 10 * time.Second
+
+	fired := make(chan struct {
+		absPath string
+		gistID  string
+	}, 1)
+	w.OnChange = func(absPath, gistID string) {
+		fired <- struct {
+			absPath string
+			gistID  string
+		}{absPath, gistID}
+	}
+
+	// Start the event loop so Stop() can close(w.done) cleanly.
+	go func() { _ = w.Start() }()
+	time.Sleep(50 * time.Millisecond)
+
+	w.scheduleSync("/fake/flush.txt", "gist_flush")
+
+	w.Stop()
+
+	select {
+	case got := <-fired:
+		assert.Equal(t, "/fake/flush.txt", got.absPath)
+		assert.Equal(t, "gist_flush", got.gistID)
+	case <-time.After(1 * time.Second):
+		t.Fatal("Stop() did not flush the pending debounced sync")
 	}
 }
