@@ -21,8 +21,7 @@ var listCmd = &cobra.Command{
 	},
 }
 
-// runListInteractive runs the interactive file list.
-// Returns (backed, error): backed is true if the user chose "← Back".
+// runListInteractive shows the file list; returns backed=true if the user chose "← Back".
 func runListInteractive() (bool, error) {
 	sm, err := state.NewManager()
 	if err != nil {
@@ -108,7 +107,6 @@ func runListInteractive() (bool, error) {
 				cm.Stdout = os.Stdout
 				cm.Stderr = os.Stderr
 				_ = cm.Run()
-				// After editing, clear screen and return to this action menu
 				clearScreen()
 				continue
 			case "view":
@@ -117,11 +115,9 @@ func runListInteractive() (bool, error) {
 				cm.Stdout = os.Stdout
 				cm.Stderr = os.Stderr
 				_ = cm.Run()
-				// After viewing, clear screen and return to this action menu
 				clearScreen()
 				continue
 			case "cancel":
-				// Back to file list
 			}
 			break
 		}

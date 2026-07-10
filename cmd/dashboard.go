@@ -36,7 +36,7 @@ func runDashboard() {
 		clearScreen()
 		renderHeader()
 
-		// Create the selection menu (with filter hint disabled – not needed for 7-item menu)
+		// Filter hint disabled — not useful on a 7-item menu.
 		km := huh.NewDefaultKeyMap()
 		km.Select.Filter.SetEnabled(false)
 		form := huh.NewForm(
@@ -62,7 +62,6 @@ func runDashboard() {
 			break
 		}
 
-		// Execute the chosen action
 		backedOut := false
 		switch action {
 		case "status":
@@ -114,7 +113,6 @@ func renderHeader() {
 	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
 	fmt.Println(headerStyle.Render(art))
 
-	// Status detection
 	sm, err := state.NewManager()
 	statusText := "○ STOPPED"
 	statusColor := "8" // Grey
@@ -142,8 +140,7 @@ func renderHeader() {
 	fmt.Println(statusStyle.Render(fmt.Sprintf("  Monitor: %s%s\n", statusText, pidText)))
 }
 
-// runDashboardAddInteraction is a multi-step wizard for adding a file to monitor.
-// Returns true if the user cancelled at any step.
+// runDashboardAddInteraction runs the add-file wizard; returns true if the user cancelled.
 func runDashboardAddInteraction() bool {
 	// Step 1: File selection
 	clearScreen()
@@ -187,7 +184,6 @@ func runDashboardAddInteraction() bool {
 		return true
 	}
 
-	// Set the gist-id flag and execute
 	_ = addCmd.Flags().Set("gist-id", gistID)
 	_ = addCmd.RunE(addCmd, []string{filePath})
 	// Reset the flag so it doesn't persist across calls
@@ -195,8 +191,7 @@ func runDashboardAddInteraction() bool {
 	return false
 }
 
-// runDashboardRemoveInteraction shows a selectable list of monitored files,
-// then confirms before removing. Returns true if the user cancelled.
+// runDashboardRemoveInteraction runs the remove-file wizard; returns true if the user cancelled.
 func runDashboardRemoveInteraction() bool {
 	sm, err := state.NewManager()
 	if err != nil {
@@ -213,7 +208,6 @@ func runDashboardRemoveInteraction() bool {
 		return true
 	}
 
-	// Build the selection list
 	clearScreen()
 	renderCompactHeader()
 	var options []huh.Option[string]
@@ -233,7 +227,6 @@ func runDashboardRemoveInteraction() bool {
 		return true
 	}
 
-	// Confirmation step
 	clearScreen()
 	renderCompactHeader()
 	var confirmed bool
@@ -249,7 +242,7 @@ func runDashboardRemoveInteraction() bool {
 	return false
 }
 
-// runFilteredFileBrowser provides a searchable file browser using huh.Select.
+// runFilteredFileBrowser prompts for a file via a searchable list.
 func runFilteredFileBrowser(startDir string) (string, error) {
 	currentDir := startDir
 	for {
@@ -307,7 +300,6 @@ func runFilteredFileBrowser(startDir string) (string, error) {
 	}
 }
 
-// homeDir returns the user's home directory path.
 func homeDir() string {
 	if h, err := os.UserHomeDir(); err == nil {
 		return h
@@ -315,8 +307,7 @@ func homeDir() string {
 	return ""
 }
 
-// startMonitorInBackground launches the monitor as a detached background
-// process using the current binary, so the dashboard is not blocked.
+// startMonitorInBackground launches a detached monitor so the dashboard is not blocked.
 func startMonitorInBackground() {
 	if isMonitorRunning() {
 		fmt.Println("Monitor is already running.")

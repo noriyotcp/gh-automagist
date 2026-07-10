@@ -59,7 +59,6 @@ func TestManager_LoadAndSaveParity(t *testing.T) {
 	err = newManager.Load()
 	require.NoError(t, err)
 
-	// Verification: Ensure the loaded data perfectly matches what was saved
 	require.Contains(t, newManager.Files, mockPath)
 	loadedState := newManager.Files[mockPath]
 

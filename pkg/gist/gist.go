@@ -10,15 +10,12 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 )
 
-// Client wraps the GitHub CLI execution context.
 type Client struct{}
 
-// NewClient initializes a new GitHub Gist API client.
 func NewClient() *Client {
 	return &Client{}
 }
 
-// gistUpdateRequest represents the JSON payload to update a Gist via GitHub API.
 type gistUpdateRequest struct {
 	Files map[string]gistFile `json:"files"`
 }
@@ -27,11 +24,10 @@ type gistFile struct {
 	Content string `json:"content"`
 }
 
-// UpdateFile uploads the new content of a local file to the specified Gist ID.
+// UpdateFile PATCHes the Gist with the file's content.
 func (c *Client) UpdateFile(gistID string, localFilePath string, content []byte) error {
 	filename := filepath.Base(localFilePath)
 
-	// Prepare the JSON payload required by the GitHub API
 	payload := gistUpdateRequest{
 		Files: map[string]gistFile{
 			filename: {
@@ -52,7 +48,6 @@ func (c *Client) UpdateFile(gistID string, localFilePath string, content []byte)
 		return fmt.Errorf("failed to initialize github rest client: %w", err)
 	}
 
-	// We don't necessarily need the response body, so we pass nil
 	err = restClient.Patch(apiEndpoint, bytes.NewReader(payloadBytes), nil)
 	if err != nil {
 		return fmt.Errorf("failed to execute gist patch request: %w", err)
@@ -67,12 +62,10 @@ type gistCreateRequest struct {
 	Files       map[string]gistFile `json:"files"`
 }
 
-// GistResponse represents the response when a Gist is created or queried.
 type GistResponse struct {
 	ID string `json:"id"`
 }
 
-// CreateGist creates a new Gist with the provided file and returns the new Gist ID.
 func (c *Client) CreateGist(localFilePath, description string, public bool) (string, error) {
 	filename := filepath.Base(localFilePath)
 

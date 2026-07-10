@@ -42,7 +42,6 @@ var addCmd = &cobra.Command{
 
 		if gistIDFlag != "" {
 			fmt.Printf("Linking %s to Gist %s...\n", path, gistIDFlag)
-			// Read file to upload it initially
 			content, err := os.ReadFile(absPath)
 			if err != nil {
 				return fmt.Errorf("failed to read file: %w", err)

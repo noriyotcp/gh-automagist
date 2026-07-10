@@ -22,7 +22,7 @@ func TestClient_PayloadGeneration(t *testing.T) {
 	content, err := os.ReadFile(tempFilePath)
 	require.NoError(t, err)
 
-	// 3. Replicate the payload generation logic to verify the JSON structure matches GitHub's API perfectly
+	// 3. Re-derive the payload here to lock down the JSON shape against the GitHub API.
 	filename := filepath.Base(tempFilePath)
 	payload := gistUpdateRequest{
 		Files: map[string]gistFile{
