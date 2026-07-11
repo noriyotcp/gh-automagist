@@ -13,7 +13,12 @@ import (
 
 // DefaultDebounceInterval is the quiet-window after the last write before OnChange
 // fires, so rapid successive writes to the same file collapse into a single sync.
-const DefaultDebounceInterval = 1 * time.Second
+// 5s matches the observed cadence of AI-agent Edit tools (Claude Code and
+// similar), which typically emit edits 2–10s apart — Phase 1's original 1s
+// undershot that pattern and let bursts leak through as one PATCH each.
+// Callers can override via Watcher.DebounceInterval or the --debounce flag
+// / GH_AUTOMAGIST_DEBOUNCE_INTERVAL env var wired up in cmd/monitor.go.
+const DefaultDebounceInterval = 5 * time.Second
 
 // Watcher watches the parent directories of tracked files and calls OnChange on write.
 type Watcher struct {
