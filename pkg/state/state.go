@@ -14,6 +14,9 @@ type FileState struct {
 	GistID    string `json:"gist_id"`
 	UpdatedAt int64  `json:"updated_at"`
 	Status    string `json:"status"` // e.g., "active"
+
+	RemoteUpdatedAt int64  `json:"remote_updated_at,omitempty"`
+	ContentSHA      string `json:"content_sha,omitempty"`
 }
 
 type Manager struct {
@@ -60,7 +63,9 @@ func (m *Manager) Load() error {
 	return nil
 }
 
-// Save persists Files to state.json, creating the config directory if needed.
+// Save persists Files to state.json atomically (tmp + rename), creating the
+// config directory if needed. A partial write during shutdown leaves the
+// previous file intact rather than truncated.
 func (m *Manager) Save() error {
 	err := os.MkdirAll(m.configDir, 0755)
 	if err != nil {
@@ -73,9 +78,13 @@ func (m *Manager) Save() error {
 		return fmt.Errorf("failed to encode state json: %w", err)
 	}
 
-	err = os.WriteFile(m.statePath, data, 0644)
-	if err != nil {
+	tmpPath := m.statePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write state file: %w", err)
+	}
+	if err := os.Rename(tmpPath, m.statePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename state file into place: %w", err)
 	}
 
 	return nil
