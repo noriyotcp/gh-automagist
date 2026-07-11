@@ -42,5 +42,8 @@ var restartCmd = &cobra.Command{
 
 func init() {
 	restartCmd.Flags().BoolVarP(&restartForeground, "foreground", "f", false, "Run the monitor in the foreground instead of as a daemon")
+	restartCmd.Flags().DurationVar(&debounceInterval, "debounce", 0,
+		"Quiet-window between the last write and the Gist sync (e.g. 5s, 500ms, 0 to disable). "+
+			"Overrides "+debounceEnvVar+" env var and the compiled-in default.")
 	rootCmd.AddCommand(restartCmd)
 }

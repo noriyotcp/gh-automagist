@@ -16,6 +16,11 @@ import (
 )
 
 var daemonMode bool
+var debounceInterval time.Duration
+
+// GH_AUTOMAGIST_DEBOUNCE_INTERVAL is the env-var fallback for --debounce.
+// Kept at package scope so cmd/monitor.go and its test share one name.
+const debounceEnvVar = "GH_AUTOMAGIST_DEBOUNCE_INTERVAL"
 
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
@@ -33,7 +38,13 @@ var monitorCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("could not determine executable path: %w", err)
 			}
-			child := exec.Command(binary, "monitor")
+			// Forward --debounce to the child so the daemon runs with the
+			// caller-specified interval. The env var is inherited automatically.
+			childArgs := []string{"monitor"}
+			if cmd.Flags().Changed("debounce") {
+				childArgs = append(childArgs, "--debounce", debounceInterval.String())
+			}
+			child := exec.Command(binary, childArgs...)
 			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 			child.Stdin = nil
 			child.Stdout = nil
@@ -83,6 +94,23 @@ var monitorCmd = &cobra.Command{
 			return fmt.Errorf("failed to initialize watcher: %w", err)
 		}
 
+		// Resolve the debounce interval: --debounce > env var > default.
+		effective, resolveErr := resolveDebounce(
+			cmd.Flags().Changed("debounce"),
+			debounceInterval,
+			os.Getenv(debounceEnvVar),
+		)
+		if resolveErr != nil {
+			log.Printf("Warning: invalid %s=%q, using default: %v",
+				debounceEnvVar, os.Getenv(debounceEnvVar), resolveErr)
+		}
+		watcher.DebounceInterval = effective
+		if effective > 0 {
+			log.Printf("[gh-automagist] debounce interval: %s", effective)
+		} else {
+			log.Printf("[gh-automagist] debounce disabled (every write triggers immediate sync)")
+		}
+
 		// 3. Initialize the GitHub API Client
 		gistClient := gist.NewClient()
 
@@ -117,5 +145,8 @@ var monitorCmd = &cobra.Command{
 
 func init() {
 	monitorCmd.Flags().BoolVarP(&daemonMode, "daemon", "d", false, "Run monitor in the background as a daemon")
+	monitorCmd.Flags().DurationVar(&debounceInterval, "debounce", 0,
+		"Quiet-window between the last write and the Gist sync (e.g. 5s, 500ms, 0 to disable). "+
+			"Overrides "+debounceEnvVar+" env var and the compiled-in default.")
 	rootCmd.AddCommand(monitorCmd)
 }
