@@ -5,10 +5,19 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/noriyo_tcp/gh-automagist/pkg/gist"
 	"github.com/noriyo_tcp/gh-automagist/pkg/notify"
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/spf13/cobra"
+)
+
+// Traffic-light badge palette. lipgloss strips ANSI codes automatically when
+// stdout is not a TTY so pipes / redirects stay grep-clean.
+var (
+	inSyncStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
+	newerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
 )
 
 var statusCmd = &cobra.Command{
@@ -64,11 +73,11 @@ var statusCmd = &cobra.Command{
 func statusBadge(s notify.FileStatus) string {
 	switch {
 	case s.Err != nil:
-		return fmt.Sprintf("[error: %v]", s.Err)
+		return errorStyle.Render(fmt.Sprintf("[error: %v]", s.Err))
 	case s.RemoteNewer:
-		return "[remote: newer ⇧]"
+		return newerStyle.Render("[remote: newer ⇧]")
 	default:
-		return "[in sync]"
+		return inSyncStyle.Render("[in sync]")
 	}
 }
 
