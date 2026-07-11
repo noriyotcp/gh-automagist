@@ -42,3 +42,22 @@ func TestClient_PayloadGeneration(t *testing.T) {
 
 // Note: We avoid an actual integration test calling restClient.Patch() here to prevent
 // mutating the user's real GitHub account or exceeding API rate limits during standard local tests.
+
+func TestFetchGistResponse_ExtractsFileContent(t *testing.T) {
+	body := `{
+		"updated_at": "2026-07-10T22:03:26Z",
+		"files": {
+			"test.txt": {
+				"filename": "test.txt",
+				"content": "hello world"
+			}
+		}
+	}`
+	var resp gistFetchResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &resp))
+
+	f, ok := resp.Files["test.txt"]
+	require.True(t, ok, "test.txt should be present in parsed response")
+	assert.Equal(t, "hello world", f.Content)
+	assert.Equal(t, "2026-07-10T22:03:26Z", resp.UpdatedAt)
+}

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -112,4 +113,71 @@ func TestManager_RemoveTrackedFile(t *testing.T) {
 
 	m.RemoveTrackedFile("/fake/path")
 	assert.NotContains(t, m.Files, "/fake/path")
+}
+
+func TestManager_Save_NoTempLeaks(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+
+	m.AddTrackedFile("/some/path", "gist1", 100)
+	require.NoError(t, m.Save())
+
+	tmpPath := m.statePath + ".tmp"
+	_, err = os.Stat(tmpPath)
+	assert.True(t, os.IsNotExist(err), "tmp file should not remain after successful Save")
+}
+
+func TestManager_Save_LeavesOriginalIntactOnError(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+
+	m.AddTrackedFile("/a", "gist_a", 100)
+	require.NoError(t, m.Save())
+	originalBytes, err := os.ReadFile(m.statePath)
+	require.NoError(t, err)
+
+	// Read-only the config directory so the tmp write fails.
+	require.NoError(t, os.Chmod(m.configDir, 0555))
+	t.Cleanup(func() { _ = os.Chmod(m.configDir, 0755) })
+
+	m.AddTrackedFile("/b", "gist_b", 200)
+	saveErr := m.Save()
+	assert.Error(t, saveErr, "Save should fail while the config directory is read-only")
+
+	require.NoError(t, os.Chmod(m.configDir, 0755))
+
+	afterBytes, err := os.ReadFile(m.statePath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalBytes), string(afterBytes),
+		"state.json must be untouched when Save fails partway")
+}
+
+func TestFileState_JSONRoundTrip_NewFields(t *testing.T) {
+	orig := FileState{
+		GistID:          "abc",
+		UpdatedAt:       100,
+		Status:          "active",
+		RemoteUpdatedAt: 200,
+		ContentSHA:      "a1b2c3d4",
+	}
+	data, err := json.Marshal(orig)
+	require.NoError(t, err)
+
+	var back FileState
+	require.NoError(t, json.Unmarshal(data, &back))
+	assert.Equal(t, orig, back)
+}
+
+func TestFileState_JSONBackwardCompat(t *testing.T) {
+	// Existing state.json without the new fields must still unmarshal cleanly.
+	oldJSON := `{"gist_id":"abc","updated_at":100,"status":"active"}`
+	var s FileState
+	require.NoError(t, json.Unmarshal([]byte(oldJSON), &s))
+	assert.Equal(t, "abc", s.GistID)
+	assert.Equal(t, int64(100), s.UpdatedAt)
+	assert.Equal(t, "active", s.Status)
+	assert.Equal(t, int64(0), s.RemoteUpdatedAt)
+	assert.Equal(t, "", s.ContentSHA)
 }
