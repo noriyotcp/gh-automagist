@@ -66,7 +66,7 @@ func TestGistCommitEntry_ExtractsCommittedAt(t *testing.T) {
 	// Response shape from GET /gists/:id/commits?per_page=1
 	body := `[
 		{
-			"version": "58215998cc8162cbf2f2a45b0bc3775d107fb4a0",
+			"version": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 			"committed_at": "2026-07-10T22:03:26Z"
 		}
 	]`
