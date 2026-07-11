@@ -63,7 +63,7 @@ If [path] is omitted, all tracked files are processed.`,
 		gistClient := gist.NewClient()
 		var pulled, skipped, blocked, errored int
 		for _, path := range targets {
-			switch runPullFile(sm, gistClient, path) {
+			switch pullFile(sm, gistClient, path) {
 			case pullStatusPulled:
 				pulled++
 			case pullStatusSkipped:
@@ -94,7 +94,7 @@ const (
 	pullStatusError
 )
 
-func runPullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus {
+func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus {
 	fs := sm.Files[absPath]
 	fmt.Printf("\n-> %s\n", displayPath(absPath))
 
