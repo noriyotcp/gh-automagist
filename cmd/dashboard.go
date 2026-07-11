@@ -11,6 +11,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/noriyo_tcp/gh-automagist/pkg/gist"
+	"github.com/noriyo_tcp/gh-automagist/pkg/notify"
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -30,11 +32,18 @@ func init() {
 }
 
 func runDashboard() {
+	// One-shot fetch at dashboard entry — cached across the menu loop.
+	// Refreshing on every iteration would issue a network round-trip per
+	// menu action, which turns interactive UX into wait-then-interact.
+	// User exits and re-enters the dashboard to refresh.
+	dashboardStatuses := fetchDashboardStatuses()
+
 	for {
 		var action string
 
 		clearScreen()
 		renderHeader()
+		renderDashboardNotice(dashboardStatuses)
 
 		// Filter hint disabled — not useful on a 7-item menu.
 		km := huh.NewDefaultKeyMap()
@@ -91,6 +100,55 @@ func runDashboard() {
 		if !backedOut {
 			waitForEnter()
 		}
+	}
+}
+
+// fetchDashboardStatuses runs a single notify.Detect at dashboard entry.
+// Returns nil silently on setup failure (no tracked files, load error) —
+// renderDashboardNotice treats nil as "nothing to say".
+func fetchDashboardStatuses() []notify.FileStatus {
+	sm, err := state.NewManager()
+	if err != nil {
+		return nil
+	}
+	if err := sm.Load(); err != nil {
+		return nil
+	}
+	if len(sm.Files) == 0 {
+		return nil
+	}
+	return notify.Detect(sm, gist.NewClient())
+}
+
+// renderDashboardNotice prints the "N files have remote changes" summary
+// under the header if there is anything to report; silent otherwise.
+// Fetch failures are surfaced as a separate line so users notice offline
+// runs but a normal in-sync setup renders no extra chrome.
+func renderDashboardNotice(statuses []notify.FileStatus) {
+	if len(statuses) == 0 {
+		return
+	}
+	var newerCount, errCount int
+	for _, s := range statuses {
+		switch {
+		case s.Err != nil:
+			errCount++
+		case s.RemoteNewer:
+			newerCount++
+		}
+	}
+	if newerCount > 0 {
+		notice := lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(
+			fmt.Sprintf("⚠ %d file(s) have remote changes — run `gh automagist fetch` for details", newerCount))
+		fmt.Println(notice)
+	}
+	if errCount > 0 {
+		notice := lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(
+			fmt.Sprintf("! %d file(s) could not be checked (network error)", errCount))
+		fmt.Println(notice)
+	}
+	if newerCount > 0 || errCount > 0 {
+		fmt.Println()
 	}
 }
 
