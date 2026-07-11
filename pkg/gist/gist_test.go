@@ -61,3 +61,18 @@ func TestFetchGistResponse_ExtractsFileContent(t *testing.T) {
 	assert.Equal(t, "hello world", f.Content)
 	assert.Equal(t, "2026-07-10T22:03:26Z", resp.UpdatedAt)
 }
+
+func TestGistCommitEntry_ExtractsCommittedAt(t *testing.T) {
+	// Response shape from GET /gists/:id/commits?per_page=1
+	body := `[
+		{
+			"version": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+			"committed_at": "2026-07-10T22:03:26Z"
+		}
+	]`
+	var commits []gistCommitEntry
+	require.NoError(t, json.Unmarshal([]byte(body), &commits))
+
+	require.Len(t, commits, 1)
+	assert.Equal(t, "2026-07-10T22:03:26Z", commits[0].CommittedAt)
+}

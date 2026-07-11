@@ -103,6 +103,35 @@ func (c *Client) FetchFile(gistID, filename string) (content []byte, gistUpdated
 	return []byte(f.Content), t.Unix(), nil
 }
 
+type gistCommitEntry struct {
+	CommittedAt string `json:"committed_at"`
+}
+
+// FetchGistMeta returns the timestamp of the Gist's most recent commit as a
+// unix epoch. Uses the commits endpoint rather than the full Gist so the
+// payload does not include any file content — useful for periodic polling
+// where only "did anything change" matters.
+func (c *Client) FetchGistMeta(gistID string) (updatedAt int64, err error) {
+	restClient, err := api.DefaultRESTClient()
+	if err != nil {
+		return 0, fmt.Errorf("failed to initialize github rest client: %w", err)
+	}
+
+	var commits []gistCommitEntry
+	if err := restClient.Get(fmt.Sprintf("gists/%s/commits?per_page=1", gistID), &commits); err != nil {
+		return 0, fmt.Errorf("failed to fetch gist %s commits: %w", gistID, err)
+	}
+	if len(commits) == 0 {
+		return 0, fmt.Errorf("gist %s has no commits", gistID)
+	}
+
+	t, err := time.Parse(time.RFC3339, commits[0].CommittedAt)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse gist committed_at %q: %w", commits[0].CommittedAt, err)
+	}
+	return t.Unix(), nil
+}
+
 func (c *Client) CreateGist(localFilePath, description string, public bool) (string, error) {
 	filename := filepath.Base(localFilePath)
 
