@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/noriyo_tcp/gh-automagist/pkg/gist"
+	"github.com/noriyo_tcp/gh-automagist/pkg/notify"
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/spf13/cobra"
 )
@@ -45,13 +47,29 @@ var statusCmd = &cobra.Command{
 			return nil
 		}
 
+		statuses := notify.Detect(sm, gist.NewClient())
+
 		fmt.Printf("Registered Files (%d):\n", len(sm.Files))
-		for path, info := range sm.Files {
-			fmt.Printf("- %s (Gist ID: %s)\n", path, info.GistID)
+		for _, s := range statuses {
+			fmt.Printf("- %s (Gist ID: %s)  %s\n", s.Path, s.GistID, statusBadge(s))
 		}
 
 		return nil
 	},
+}
+
+// statusBadge renders a short suffix describing the file's notify state.
+// Kept trivial so both status and dashboard can reuse it if we ever wire
+// dashboard through the same struct.
+func statusBadge(s notify.FileStatus) string {
+	switch {
+	case s.Err != nil:
+		return fmt.Sprintf("[error: %v]", s.Err)
+	case s.RemoteNewer:
+		return "[remote: newer ⇧]"
+	default:
+		return "[in sync]"
+	}
 }
 
 func init() {
