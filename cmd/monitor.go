@@ -153,7 +153,16 @@ var monitorCmd = &cobra.Command{
 		if err := sm.WritePID(); err != nil {
 			log.Printf("Warning: failed to write PID file: %v", err)
 		}
+		if err := sm.WriteMonitorInfo(state.MonitorInfo{
+			PID:       os.Getpid(),
+			Version:   Version,
+			Commit:    Commit,
+			StartedAt: time.Now().Unix(),
+		}); err != nil {
+			log.Printf("Warning: failed to write monitor info: %v", err)
+		}
 		defer sm.DeletePID()
+		defer sm.DeleteMonitorInfo()
 
 		fmt.Printf("Monitoring %d files. Press Ctrl+C to stop.\n", len(sm.Files))
 		return watcher.Start()
