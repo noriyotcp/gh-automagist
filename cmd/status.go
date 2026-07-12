@@ -33,6 +33,10 @@ var statusCmd = &cobra.Command{
 		}
 
 		pid := sm.GetPID()
+		info, infoErr := sm.ReadMonitorInfo()
+		if infoErr != nil {
+			fmt.Printf("Warning: failed to read monitor info: %v\n", infoErr)
+		}
 		if pid == 0 {
 			fmt.Println("Monitor Status: STOPPED")
 		} else {
@@ -41,10 +45,22 @@ var statusCmd = &cobra.Command{
 				fmt.Println("Monitor Status: STOPPED")
 			} else {
 				stateStr := strings.TrimSpace(string(out))
+				label := "RUNNING"
 				if strings.HasPrefix(stateStr, "T") {
-					fmt.Printf("Monitor Status: SUSPENDED (PID: %d)\n", pid)
+					label = "SUSPENDED"
+				}
+				daemonVersion := ""
+				if info != nil {
+					daemonVersion = info.Version
+				}
+				if daemonVersion != "" {
+					fmt.Printf("Monitor Status: %s (PID: %d, version: %s)\n", label, pid, daemonVersion)
 				} else {
-					fmt.Printf("Monitor Status: RUNNING (PID: %d)\n", pid)
+					fmt.Printf("Monitor Status: %s (PID: %d)\n", label, pid)
+				}
+				if daemonVersion != "" && daemonVersion != Version {
+					fmt.Printf("  %s daemon is %s but installed binary is %s — run 'gh automagist restart' to pick it up.\n",
+						errorStyle.Render("!"), daemonVersion, Version)
 				}
 			}
 		}

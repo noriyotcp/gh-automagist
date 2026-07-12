@@ -7,6 +7,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Set by SetVersionInfo at process start (main.go passes goreleaser-injected
+// values). Read by cmd/status.go for the daemon-vs-binary mismatch check and
+// by cmd/monitor.go when recording MonitorInfo.
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "automagist",
 	Short: "Automagically sync local files to GitHub Gists",
@@ -16,6 +25,14 @@ and automatically synchronizes their changes seamlessly to GitHub Gists.`,
 		// No subcommand → show help.
 		cmd.Help()
 	},
+}
+
+// SetVersionInfo wires the goreleaser-injected build metadata into both the
+// package-scope vars (used at runtime by status/monitor) and Cobra's Version
+// field (which auto-adds the --version flag).
+func SetVersionInfo(v, c, d string) {
+	Version, Commit, Date = v, c, d
+	rootCmd.Version = fmt.Sprintf("%s (commit %s, built %s)", v, c, d)
 }
 
 func Execute() {

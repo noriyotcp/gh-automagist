@@ -23,11 +23,22 @@ type FileState struct {
 	PullSuppressUntil int64 `json:"pull_suppress_until,omitempty"`
 }
 
+// MonitorInfo is the daemon's self-report, written when the monitor comes up
+// and removed at shutdown. Kept in a separate file from state.json (which is
+// the tracked-files map) so runtime metadata does not mix with tracked data.
+type MonitorInfo struct {
+	PID       int    `json:"pid"`
+	Version   string `json:"version"`
+	Commit    string `json:"commit,omitempty"`
+	StartedAt int64  `json:"started_at"`
+}
+
 type Manager struct {
-	configDir string
-	statePath string
-	pidPath   string
-	Files     map[string]FileState
+	configDir       string
+	statePath       string
+	pidPath         string
+	monitorInfoPath string
+	Files           map[string]FileState
 }
 
 func NewManager() (*Manager, error) {
@@ -39,12 +50,14 @@ func NewManager() (*Manager, error) {
 	configDir := filepath.Join(homeDir, ".config", "gh-automagist")
 	statePath := filepath.Join(configDir, "state.json")
 	pidPath := filepath.Join(configDir, "monitor.pid")
+	monitorInfoPath := filepath.Join(configDir, "monitor.info")
 
 	return &Manager{
-		configDir: configDir,
-		statePath: statePath,
-		pidPath:   pidPath,
-		Files:     make(map[string]FileState),
+		configDir:       configDir,
+		statePath:       statePath,
+		pidPath:         pidPath,
+		monitorInfoPath: monitorInfoPath,
+		Files:           make(map[string]FileState),
 	}, nil
 }
 
@@ -121,7 +134,48 @@ func (m *Manager) DeletePID() error {
 	return nil
 }
 
-// KillMonitor sends SIGKILL to the given pid and clears the PID file.
+// WriteMonitorInfo persists the daemon's runtime metadata alongside monitor.pid.
+// Callers write this once at daemon startup; status reads it to show the
+// running daemon's version and detect daemon-vs-binary drift.
+func (m *Manager) WriteMonitorInfo(info MonitorInfo) error {
+	if err := os.MkdirAll(m.configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode monitor info: %w", err)
+	}
+	return os.WriteFile(m.monitorInfoPath, data, 0644)
+}
+
+// ReadMonitorInfo returns nil (no error) when the file does not exist, so
+// old daemons that only wrote monitor.pid are handled the same as a missing
+// info file — callers treat "no info" as "version unknown".
+func (m *Manager) ReadMonitorInfo() (*MonitorInfo, error) {
+	data, err := os.ReadFile(m.monitorInfoPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read monitor info: %w", err)
+	}
+	var info MonitorInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, fmt.Errorf("failed to parse monitor info: %w", err)
+	}
+	return &info, nil
+}
+
+func (m *Manager) DeleteMonitorInfo() error {
+	err := os.Remove(m.monitorInfoPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// KillMonitor sends SIGKILL to the given pid and clears the PID file
+// (and monitor.info if present).
 //
 // Returns:
 //   - (true, nil) if the process was killed cleanly
@@ -136,9 +190,11 @@ func (m *Manager) KillMonitor(pid int) (killed bool, err error) {
 	switch {
 	case killErr == nil:
 		m.DeletePID()
+		m.DeleteMonitorInfo()
 		return true, nil
 	case errors.Is(killErr, os.ErrProcessDone) || errors.Is(killErr, syscall.ESRCH):
 		m.DeletePID()
+		m.DeleteMonitorInfo()
 		return false, nil
 	default:
 		return false, fmt.Errorf("failed to kill monitor (PID %d): %w", pid, killErr)

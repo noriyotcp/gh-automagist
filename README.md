@@ -30,7 +30,8 @@ gh extension install noriyotcp/gh-automagist
 | `gh automagist remove [path]` | Stop monitoring a specific file. |
 | `gh automagist list` | View tracked files, open them in `$EDITOR`, or view the Gist online. |
 | `gh automagist monitor` | Start the monitor in the foreground. Use `--daemon` to run it silently in the background, or `--debounce=<dur>` to tune the quiet-window before Gist syncs (see [Configuration](#configuration)). |
-| `gh automagist status` | View the status of the background daemon (RUNNING/STOPPED) and the list of currently tracked files. |
+| `gh automagist status` | View the status of the background daemon (RUNNING/STOPPED, with daemon version when known) and the list of currently tracked files. Warns when the running daemon's version differs from the installed binary — a hint to run `restart`. |
+| `gh automagist --version` | Print the installed binary's version, commit, and build date. |
 | `gh automagist fetch [path]` | Check tracked Gists for remote changes without applying them. Pass `--diff` to see the actual unified diff (local vs remote) — for all newer files without a path, or one specific file with a path. Add `--no-pager` to skip the pager. |
 | `gh automagist pull [path]` | Fetch tracked files from their Gists back to local disk with backup and safety checks. Supports `--force`, `--yes`, `--dry-run`, `--no-backup`. |
 | `gh automagist stop` | Gracefully terminate the background daemon. |

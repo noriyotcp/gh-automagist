@@ -192,3 +192,54 @@ func TestFileState_JSONOmitEmpty_PullSuppress(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "pull_suppress_until")
 }
+
+func TestMonitorInfo_RoundTrip(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+
+	orig := MonitorInfo{PID: 4242, Version: "v1.8.0", Commit: "abc1234", StartedAt: 1720000000}
+	require.NoError(t, m.WriteMonitorInfo(orig))
+
+	back, err := m.ReadMonitorInfo()
+	require.NoError(t, err)
+	require.NotNil(t, back)
+	assert.Equal(t, orig, *back)
+}
+
+func TestReadMonitorInfo_MissingFileReturnsNil(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+
+	info, err := m.ReadMonitorInfo()
+	require.NoError(t, err)
+	assert.Nil(t, info, "missing info file should surface as nil, not error")
+}
+
+func TestDeleteMonitorInfo_IdempotentWhenMissing(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+
+	assert.NoError(t, m.DeleteMonitorInfo(), "delete on absent file must be a no-op")
+}
+
+func TestKillMonitor_CleansMonitorInfoAlongsidePID(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(m.configDir, 0755))
+
+	require.NoError(t, m.WriteMonitorInfo(MonitorInfo{PID: 99999999, Version: "v1.8.0"}))
+
+	stalePID := 99999999
+	require.NoError(t, os.WriteFile(m.pidPath, []byte(fmt.Sprintf("%d", stalePID)), 0644))
+
+	_, err = m.KillMonitor(stalePID)
+	require.NoError(t, err)
+
+	back, err := m.ReadMonitorInfo()
+	require.NoError(t, err)
+	assert.Nil(t, back, "KillMonitor should clean up monitor.info even on stale PID")
+}
