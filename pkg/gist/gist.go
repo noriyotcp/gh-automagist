@@ -103,6 +103,32 @@ func (c *Client) FetchFile(gistID, filename string) (content []byte, gistUpdated
 	return []byte(f.Content), t.Unix(), nil
 }
 
+// FetchAllFiles returns every file in the Gist keyed by filename, along with
+// the Gist's updated_at as a unix epoch. Single API call — call this instead
+// of looping FetchFile when you need multiple files from the same Gist.
+func (c *Client) FetchAllFiles(gistID string) (files map[string][]byte, updatedAt int64, err error) {
+	restClient, err := api.DefaultRESTClient()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to initialize github rest client: %w", err)
+	}
+
+	var resp gistFetchResponse
+	if err := restClient.Get(fmt.Sprintf("gists/%s", gistID), &resp); err != nil {
+		return nil, 0, fmt.Errorf("failed to fetch gist %s: %w", gistID, err)
+	}
+
+	t, err := time.Parse(time.RFC3339, resp.UpdatedAt)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to parse gist updated_at %q: %w", resp.UpdatedAt, err)
+	}
+
+	out := make(map[string][]byte, len(resp.Files))
+	for name, f := range resp.Files {
+		out[name] = []byte(f.Content)
+	}
+	return out, t.Unix(), nil
+}
+
 type gistCommitEntry struct {
 	CommittedAt string `json:"committed_at"`
 }
