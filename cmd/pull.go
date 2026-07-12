@@ -184,11 +184,8 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 		fmt.Printf("  [Backup] %s\n", displayPath(backupPath))
 	}
 
-	// The suppression marker must land in state.json BEFORE the atomic rename
-	// so the daemon reloads it in response to the fsnotify write and treats the
-	// PATCH as a pull-echo. resolveDebounce here matches the daemon's env + default
-	// path; a running daemon that was itself started with `--debounce=<flag>` and
-	// no env var will out-race the pull window — documented as a known edge case.
+	// Must Save() before the rename below; the daemon reacts to the fsnotify
+	// write and needs to see the marker before it decides on the PATCH.
 	effective, _ := resolveDebounce(false, 0, os.Getenv(debounceEnvVar))
 	suppressUntil := time.Now().Add(effective + pullSuppressSlack).Unix()
 	fs.PullSuppressUntil = suppressUntil
@@ -224,9 +221,7 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 	return pullStatusPulled
 }
 
-// pullSuppressSlack is the safety margin added on top of the resolved debounce
-// interval when we set FileState.PullSuppressUntil. Covers fsnotify delivery
-// jitter and the gap between pull's Save and the daemon's Load.
+// pullSuppressSlack absorbs fsnotify jitter and the pull-Save → daemon-Load gap.
 const pullSuppressSlack = 2 * time.Second
 
 func sha256Hex(content []byte) string {

@@ -94,10 +94,8 @@ func (w *Watcher) Start() error {
 				if _, isTracked := w.stateManager.Files[event.Name]; isTracked {
 					log.Printf("[Sync] Change detected in %s", filepath.Base(event.Name))
 
-					// Reload before mutating: `gh automagist pull` may have
-					// written PullSuppressUntil / ContentSHA in the last few
-					// milliseconds, and our Save() below would otherwise clobber
-					// them with our stale in-memory view.
+					// Reload so a concurrent `gh automagist pull` write is not
+					// clobbered by our Save() below.
 					if err := w.stateManager.Load(); err != nil {
 						log.Printf("Warning: failed to reload state.json: %v", err)
 					}
