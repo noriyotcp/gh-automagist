@@ -187,7 +187,7 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 	// Must Save() before the rename below; the daemon reacts to the fsnotify
 	// write and needs to see the marker before it decides on the PATCH.
 	effective, _ := resolveDebounce(false, 0, os.Getenv(debounceEnvVar))
-	suppressUntil := time.Now().Add(effective + pullSuppressSlack).Unix()
+	suppressUntil := time.Now().Add(effective + pullSuppressGrace).Unix()
 	fs.PullSuppressUntil = suppressUntil
 	fs.ContentSHA = remoteSHA
 	sm.Files[absPath] = fs
@@ -221,8 +221,8 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 	return pullStatusPulled
 }
 
-// pullSuppressSlack absorbs fsnotify jitter and the pull-Save → daemon-Load gap.
-const pullSuppressSlack = 2 * time.Second
+// pullSuppressGrace absorbs fsnotify jitter and the pull-Save → daemon-Load gap.
+const pullSuppressGrace = 2 * time.Second
 
 func sha256Hex(content []byte) string {
 	h := sha256.Sum256(content)
