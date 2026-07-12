@@ -29,6 +29,8 @@ func TestManager_NewManager(t *testing.T) {
 	expectedConfigDir := filepath.Join(tempHome, ".config", "gh-automagist")
 	assert.Equal(t, expectedConfigDir, m.configDir)
 	assert.Equal(t, filepath.Join(expectedConfigDir, "state.json"), m.statePath)
+	assert.Equal(t, filepath.Join(expectedConfigDir, "monitor.pid"), m.pidPath)
+	assert.Equal(t, filepath.Join(expectedConfigDir, "monitor.json"), m.monitorInfoPath)
 	assert.NotNil(t, m.Files)
 }
 
@@ -241,5 +243,5 @@ func TestKillMonitor_CleansMonitorInfoAlongsidePID(t *testing.T) {
 
 	back, err := m.ReadMonitorInfo()
 	require.NoError(t, err)
-	assert.Nil(t, back, "KillMonitor should clean up monitor.info even on stale PID")
+	assert.Nil(t, back, "KillMonitor should clean up monitor.json even on stale PID")
 }

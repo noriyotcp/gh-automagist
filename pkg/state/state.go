@@ -50,7 +50,7 @@ func NewManager() (*Manager, error) {
 	configDir := filepath.Join(homeDir, ".config", "gh-automagist")
 	statePath := filepath.Join(configDir, "state.json")
 	pidPath := filepath.Join(configDir, "monitor.pid")
-	monitorInfoPath := filepath.Join(configDir, "monitor.info")
+	monitorInfoPath := filepath.Join(configDir, "monitor.json")
 
 	return &Manager{
 		configDir:       configDir,
@@ -175,7 +175,7 @@ func (m *Manager) DeleteMonitorInfo() error {
 }
 
 // KillMonitor sends SIGKILL to the given pid and clears the PID file
-// (and monitor.info if present).
+// (and monitor.json if present).
 //
 // Returns:
 //   - (true, nil) if the process was killed cleanly
