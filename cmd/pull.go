@@ -184,6 +184,21 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 		fmt.Printf("  [Backup] %s\n", displayPath(backupPath))
 	}
 
+	// The suppression marker must land in state.json BEFORE the atomic rename
+	// so the daemon reloads it in response to the fsnotify write and treats the
+	// PATCH as a pull-echo. resolveDebounce here matches the daemon's env + default
+	// path; a running daemon that was itself started with `--debounce=<flag>` and
+	// no env var will out-race the pull window — documented as a known edge case.
+	effective, _ := resolveDebounce(false, 0, os.Getenv(debounceEnvVar))
+	suppressUntil := time.Now().Add(effective + pullSuppressSlack).Unix()
+	fs.PullSuppressUntil = suppressUntil
+	fs.ContentSHA = remoteSHA
+	sm.Files[absPath] = fs
+	if err := sm.Save(); err != nil {
+		fmt.Printf("  Error saving suppression marker: %v\n", err)
+		return pullStatusError
+	}
+
 	// Atomic write: <path>.pull.tmp then rename over the original.
 	tmpPath := absPath + ".pull.tmp"
 	if err := os.WriteFile(tmpPath, remoteContent, localInfo.Mode().Perm()); err != nil {
@@ -199,16 +214,20 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 
 	fs.UpdatedAt = time.Now().Unix()
 	fs.RemoteUpdatedAt = remoteUpdatedAt
-	fs.ContentSHA = remoteSHA
 	sm.Files[absPath] = fs
 
 	if isMonitorRunning() {
-		fmt.Println("  Note: monitor will observe this write and issue a redundant PATCH")
-		fmt.Println("        (Phase 3 will suppress it via SHA comparison).")
+		fmt.Printf("  Note: PATCH will be suppressed until %s (SHA + window match).\n",
+			time.Unix(suppressUntil, 0).Format(time.RFC3339))
 	}
 
 	return pullStatusPulled
 }
+
+// pullSuppressSlack is the safety margin added on top of the resolved debounce
+// interval when we set FileState.PullSuppressUntil. Covers fsnotify delivery
+// jitter and the gap between pull's Save and the daemon's Load.
+const pullSuppressSlack = 2 * time.Second
 
 func sha256Hex(content []byte) string {
 	h := sha256.Sum256(content)

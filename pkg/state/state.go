@@ -17,6 +17,12 @@ type FileState struct {
 
 	RemoteUpdatedAt int64  `json:"remote_updated_at,omitempty"`
 	ContentSHA      string `json:"content_sha,omitempty"`
+
+	// PullSuppressUntil is a unix-second deadline. When non-zero and still in
+	// the future, the monitor treats a fsnotify write on this file as a pull
+	// echo (see pkg/monitor.ShouldSuppress) and skips the PATCH — provided the
+	// on-disk content SHA also matches ContentSHA.
+	PullSuppressUntil int64 `json:"pull_suppress_until,omitempty"`
 }
 
 type Manager struct {

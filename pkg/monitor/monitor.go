@@ -91,14 +91,22 @@ func (w *Watcher) Start() error {
 
 			// We are only interested in Write or Create events (editors sometimes Create/Rename instead of Write)
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				if fileState, isTracked := w.stateManager.Files[event.Name]; isTracked {
+				if _, isTracked := w.stateManager.Files[event.Name]; isTracked {
 					log.Printf("[Sync] Change detected in %s", filepath.Base(event.Name))
 
-					fileState.UpdatedAt = time.Now().Unix()
-					w.stateManager.Files[event.Name] = fileState
-					w.stateManager.Save() // Persist immediately
-
-					w.scheduleSync(event.Name, fileState.GistID)
+					// Reload before mutating: `gh automagist pull` may have
+					// written PullSuppressUntil / ContentSHA in the last few
+					// milliseconds, and our Save() below would otherwise clobber
+					// them with our stale in-memory view.
+					if err := w.stateManager.Load(); err != nil {
+						log.Printf("Warning: failed to reload state.json: %v", err)
+					}
+					if fileState, stillTracked := w.stateManager.Files[event.Name]; stillTracked {
+						fileState.UpdatedAt = time.Now().Unix()
+						w.stateManager.Files[event.Name] = fileState
+						w.stateManager.Save()
+						w.scheduleSync(event.Name, fileState.GistID)
+					}
 				}
 			}
 
