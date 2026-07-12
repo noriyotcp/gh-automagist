@@ -156,11 +156,12 @@ func TestManager_Save_LeavesOriginalIntactOnError(t *testing.T) {
 
 func TestFileState_JSONRoundTrip_NewFields(t *testing.T) {
 	orig := FileState{
-		GistID:          "abc",
-		UpdatedAt:       100,
-		Status:          "active",
-		RemoteUpdatedAt: 200,
-		ContentSHA:      "a1b2c3d4",
+		GistID:            "abc",
+		UpdatedAt:         100,
+		Status:            "active",
+		RemoteUpdatedAt:   200,
+		ContentSHA:        "a1b2c3d4",
+		PullSuppressUntil: 300,
 	}
 	data, err := json.Marshal(orig)
 	require.NoError(t, err)
@@ -180,4 +181,14 @@ func TestFileState_JSONBackwardCompat(t *testing.T) {
 	assert.Equal(t, "active", s.Status)
 	assert.Equal(t, int64(0), s.RemoteUpdatedAt)
 	assert.Equal(t, "", s.ContentSHA)
+	assert.Equal(t, int64(0), s.PullSuppressUntil)
+}
+
+func TestFileState_JSONOmitEmpty_PullSuppress(t *testing.T) {
+	// PullSuppressUntil=0 must NOT appear in the encoded JSON — otherwise every
+	// state.json write from a non-Phase-3 code path would carry it as noise.
+	s := FileState{GistID: "abc", UpdatedAt: 100, Status: "active"}
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "pull_suppress_until")
 }

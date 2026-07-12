@@ -122,6 +122,23 @@ var monitorCmd = &cobra.Command{
 				return
 			}
 
+			// Re-check the on-disk state right before deciding: pull may have
+			// written PullSuppressUntil after the event-loop reload.
+			if err := sm.Load(); err != nil {
+				log.Printf("Warning: failed to reload state.json before suppression check: %v", err)
+			}
+			fs := sm.Files[absPath]
+			currentSHA := sha256Hex(content)
+			if monitor.ShouldSuppress(fs, currentSHA, time.Now().Unix()) {
+				log.Printf("  [Suppressed] %s matches pull baseline; skipping redundant PATCH", filepath.Base(absPath))
+				fs.PullSuppressUntil = 0
+				sm.Files[absPath] = fs
+				if err := sm.Save(); err != nil {
+					log.Printf("  Warning: failed to clear pull_suppress_until: %v", err)
+				}
+				return
+			}
+
 			log.Printf("  -> Uploading %s to Gist %s...", filepath.Base(absPath), gistID)
 
 			err = gistClient.UpdateFile(gistID, absPath, content)

@@ -184,6 +184,18 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 		fmt.Printf("  [Backup] %s\n", displayPath(backupPath))
 	}
 
+	// Must Save() before the rename below; the daemon reacts to the fsnotify
+	// write and needs to see the marker before it decides on the PATCH.
+	effective, _ := resolveDebounce(false, 0, os.Getenv(debounceEnvVar))
+	suppressUntil := time.Now().Add(effective + pullSuppressGrace).Unix()
+	fs.PullSuppressUntil = suppressUntil
+	fs.ContentSHA = remoteSHA
+	sm.Files[absPath] = fs
+	if err := sm.Save(); err != nil {
+		fmt.Printf("  Error saving suppression marker: %v\n", err)
+		return pullStatusError
+	}
+
 	// Atomic write: <path>.pull.tmp then rename over the original.
 	tmpPath := absPath + ".pull.tmp"
 	if err := os.WriteFile(tmpPath, remoteContent, localInfo.Mode().Perm()); err != nil {
@@ -199,16 +211,18 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 
 	fs.UpdatedAt = time.Now().Unix()
 	fs.RemoteUpdatedAt = remoteUpdatedAt
-	fs.ContentSHA = remoteSHA
 	sm.Files[absPath] = fs
 
 	if isMonitorRunning() {
-		fmt.Println("  Note: monitor will observe this write and issue a redundant PATCH")
-		fmt.Println("        (Phase 3 will suppress it via SHA comparison).")
+		fmt.Printf("  Note: PATCH will be suppressed until %s (SHA + window match).\n",
+			time.Unix(suppressUntil, 0).Format(time.RFC3339))
 	}
 
 	return pullStatusPulled
 }
+
+// pullSuppressGrace absorbs fsnotify jitter and the pull-Save → daemon-Load gap.
+const pullSuppressGrace = 2 * time.Second
 
 func sha256Hex(content []byte) string {
 	h := sha256.Sum256(content)

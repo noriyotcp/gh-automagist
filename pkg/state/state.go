@@ -17,6 +17,10 @@ type FileState struct {
 
 	RemoteUpdatedAt int64  `json:"remote_updated_at,omitempty"`
 	ContentSHA      string `json:"content_sha,omitempty"`
+
+	// PullSuppressUntil is a unix-second deadline; paired with ContentSHA it
+	// gates the daemon's post-pull PATCH via pkg/monitor.ShouldSuppress.
+	PullSuppressUntil int64 `json:"pull_suppress_until,omitempty"`
 }
 
 type Manager struct {
