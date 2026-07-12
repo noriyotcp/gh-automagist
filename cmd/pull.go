@@ -19,7 +19,6 @@ import (
 var (
 	pullForce    bool
 	pullYes      bool
-	pullDiff     bool
 	pullDryRun   bool
 	pullNoBackup bool
 )
@@ -149,12 +148,6 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 		time.Unix(remoteUpdatedAt, 0).Format(time.RFC3339))
 	fmt.Printf("  Diff:   +%d lines, -%d lines\n", added, removed)
 
-	if pullDiff {
-		fmt.Println("  --- Remote content ---")
-		fmt.Println(string(remoteContent))
-		fmt.Println("  --- End ---")
-	}
-
 	if pullDryRun {
 		fmt.Println("  Dry-run: no write performed.")
 		return pullStatusSkipped
@@ -266,7 +259,6 @@ func displayPath(p string) string {
 func init() {
 	pullCmd.Flags().BoolVar(&pullForce, "force", false, "Overwrite even if local mtime is newer than last sync")
 	pullCmd.Flags().BoolVarP(&pullYes, "yes", "y", false, "Skip the confirmation prompt")
-	pullCmd.Flags().BoolVar(&pullDiff, "diff", false, "Print the remote content before overwriting (rough diff, not unified)")
 	pullCmd.Flags().BoolVar(&pullDryRun, "dry-run", false, "Show what would happen without writing")
 	pullCmd.Flags().BoolVar(&pullNoBackup, "no-backup", false, "Skip creating the .bak file")
 	rootCmd.AddCommand(pullCmd)

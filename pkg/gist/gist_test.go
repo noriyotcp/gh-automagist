@@ -62,6 +62,23 @@ func TestFetchGistResponse_ExtractsFileContent(t *testing.T) {
 	assert.Equal(t, "2026-07-10T22:03:26Z", resp.UpdatedAt)
 }
 
+func TestFetchGistResponse_MultipleFiles(t *testing.T) {
+	body := `{
+		"updated_at": "2026-07-12T01:26:31Z",
+		"files": {
+			"a.txt": { "filename": "a.txt", "content": "aaa" },
+			"b.txt": { "filename": "b.txt", "content": "bbb" }
+		}
+	}`
+	var resp gistFetchResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &resp))
+
+	require.Len(t, resp.Files, 2)
+	assert.Equal(t, "aaa", resp.Files["a.txt"].Content)
+	assert.Equal(t, "bbb", resp.Files["b.txt"].Content)
+	assert.Equal(t, "2026-07-12T01:26:31Z", resp.UpdatedAt)
+}
+
 func TestGistCommitEntry_ExtractsCommittedAt(t *testing.T) {
 	// Response shape from GET /gists/:id/commits?per_page=1
 	body := `[
