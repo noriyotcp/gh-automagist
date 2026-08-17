@@ -1,7 +1,11 @@
 package notify
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
@@ -105,10 +109,10 @@ func TestDetect_DedupsByGistID(t *testing.T) {
 
 func TestDetect_ErrorIsolatedPerGist(t *testing.T) {
 	sm := newManager(t, map[string]state.FileState{
-		"/broken1.txt":   {GistID: "bad", RemoteUpdatedAt: 100},
-		"/broken2.txt":   {GistID: "bad", RemoteUpdatedAt: 100},
-		"/healthy.txt":   {GistID: "good", RemoteUpdatedAt: 100},
-		"/uptodate.txt":  {GistID: "quiet", RemoteUpdatedAt: 100},
+		"/broken1.txt":  {GistID: "bad", RemoteUpdatedAt: 100},
+		"/broken2.txt":  {GistID: "bad", RemoteUpdatedAt: 100},
+		"/healthy.txt":  {GistID: "good", RemoteUpdatedAt: 100},
+		"/uptodate.txt": {GistID: "quiet", RemoteUpdatedAt: 100},
 	})
 	fetchErr := errors.New("simulated 500")
 	f := &fakeFetcher{
@@ -147,6 +151,96 @@ func TestDetect_SortsResultByPath(t *testing.T) {
 	assert.Equal(t, "/a.txt", result[0].Path)
 	assert.Equal(t, "/b.txt", result[1].Path)
 	assert.Equal(t, "/c.txt", result[2].Path)
+}
+
+// writeTracked creates a real file on disk and returns its path plus the
+// sha256 of its content, so a test can set ContentSHA to either the matching
+// digest (clean) or a different one (dirty).
+func writeTracked(t *testing.T, name, content string) (path, contentSHA string) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+	sum := sha256.Sum256([]byte(content))
+	return path, hex.EncodeToString(sum[:])
+}
+
+func TestDetect_LocalDirtyWhenFileDivergesFromLastSync(t *testing.T) {
+	path, _ := writeTracked(t, "tracked.txt", "edited after the last push")
+	otherSHA := "0000000000000000000000000000000000000000000000000000000000000000"
+	sm := newManager(t, map[string]state.FileState{
+		path: {GistID: "g1", RemoteUpdatedAt: 100, ContentSHA: otherSHA},
+	})
+	f := &fakeFetcher{metaByGist: map[string]int64{"g1": 100}}
+
+	result := Detect(sm, f)
+
+	require.Len(t, result, 1)
+	assert.True(t, result[0].LocalDirty, "local content differs from the recorded digest")
+	assert.False(t, result[0].RemoteNewer, "the Gist itself has not moved")
+	assert.NoError(t, result[0].LocalErr)
+}
+
+func TestDetect_LocalCleanWhenFileMatchesLastSync(t *testing.T) {
+	path, contentSHA := writeTracked(t, "tracked.txt", "same bytes as the last push")
+	sm := newManager(t, map[string]state.FileState{
+		path: {GistID: "g1", RemoteUpdatedAt: 100, ContentSHA: contentSHA},
+	})
+	f := &fakeFetcher{metaByGist: map[string]int64{"g1": 100}}
+
+	result := Detect(sm, f)
+
+	require.Len(t, result, 1)
+	assert.False(t, result[0].LocalDirty)
+	assert.NoError(t, result[0].LocalErr)
+}
+
+func TestDetect_NoContentSHAMakesNoLocalClaim(t *testing.T) {
+	// Nothing has been synced yet, so there is no digest to compare against.
+	// The file is not even read — a missing path must not surface as an error.
+	sm := newManager(t, map[string]state.FileState{
+		"/does/not/exist.txt": {GistID: "g1", RemoteUpdatedAt: 100},
+	})
+	f := &fakeFetcher{metaByGist: map[string]int64{"g1": 100}}
+
+	result := Detect(sm, f)
+
+	require.Len(t, result, 1)
+	assert.False(t, result[0].LocalDirty)
+	assert.NoError(t, result[0].LocalErr)
+}
+
+func TestDetect_UnreadableLocalFileReportsLocalErr(t *testing.T) {
+	// A recorded digest with no file to compare it against is reported, not
+	// silently rounded down to "clean".
+	sm := newManager(t, map[string]state.FileState{
+		"/does/not/exist.txt": {GistID: "g1", RemoteUpdatedAt: 100, ContentSHA: "abc"},
+	})
+	f := &fakeFetcher{metaByGist: map[string]int64{"g1": 100}}
+
+	result := Detect(sm, f)
+
+	require.Len(t, result, 1)
+	assert.Error(t, result[0].LocalErr)
+	assert.False(t, result[0].LocalDirty)
+	assert.NoError(t, result[0].Err, "a local read failure is not a Gist fetch failure")
+}
+
+func TestDetect_LocalDirtyIsReportedEvenWhenGistFetchFails(t *testing.T) {
+	// The two axes are independent: losing the remote answer must not hide a
+	// local edit we can determine offline.
+	path, _ := writeTracked(t, "tracked.txt", "edited while GitHub was down")
+	otherSHA := "1111111111111111111111111111111111111111111111111111111111111111"
+	sm := newManager(t, map[string]state.FileState{
+		path: {GistID: "bad", RemoteUpdatedAt: 100, ContentSHA: otherSHA},
+	})
+	fetchErr := errors.New("simulated 500")
+	f := &fakeFetcher{errByGist: map[string]error{"bad": fetchErr}}
+
+	result := Detect(sm, f)
+
+	require.Len(t, result, 1)
+	assert.ErrorIs(t, result[0].Err, fetchErr)
+	assert.True(t, result[0].LocalDirty)
 }
 
 func indexByPath(s []FileStatus) map[string]FileStatus {
