@@ -94,15 +94,16 @@ func (w *Watcher) Start() error {
 				if _, isTracked := w.stateManager.Files[event.Name]; isTracked {
 					log.Printf("[Sync] Change detected in %s", filepath.Base(event.Name))
 
-					// Reload so a concurrent `gh automagist pull` write is not
-					// clobbered by our Save() below.
+					// Reload so `pull`, `add` and `remove` writes made while the
+					// daemon was up are visible without a restart.
+					//
+					// No state is written here on purpose: state.json records
+					// what was synced, not what was typed. The timestamps move
+					// only after the PATCH succeeds, in the OnChange callback.
 					if err := w.stateManager.Load(); err != nil {
 						log.Printf("Warning: failed to reload state.json: %v", err)
 					}
 					if fileState, stillTracked := w.stateManager.Files[event.Name]; stillTracked {
-						fileState.UpdatedAt = time.Now().Unix()
-						w.stateManager.Files[event.Name] = fileState
-						w.stateManager.Save()
 						w.scheduleSync(event.Name, fileState.GistID)
 					}
 				}
@@ -122,8 +123,10 @@ func (w *Watcher) Start() error {
 }
 
 // scheduleSync arms (or resets) the per-file debounce timer. gistID is captured
-// in the timer's closure so the AfterFunc callback never touches stateManager.Files
-// concurrently with the Start() event loop.
+// in the timer's closure so scheduling itself needs no state lookup. The
+// OnChange callback does read and write stateManager.Files, from the timer
+// goroutine — callers are responsible for serialising that against their own
+// use of the manager (cmd/monitor.go holds a mutex for the whole callback).
 func (w *Watcher) scheduleSync(absPath, gistID string) {
 	if w.DebounceInterval <= 0 {
 		if w.OnChange != nil {

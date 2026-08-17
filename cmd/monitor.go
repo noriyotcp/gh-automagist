@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -114,8 +115,16 @@ var monitorCmd = &cobra.Command{
 		// 3. Initialize the GitHub API Client
 		gistClient := gist.NewClient()
 
-		// 4. Hook up the watcher's OnChange callback to trigger the Gist upload
+		// 4. Hook up the watcher's OnChange callback to trigger the Gist upload.
+		// Debounce timers fire on their own goroutines, so two files edited
+		// together would otherwise run overlapping load-modify-save cycles over
+		// the same state.json. One mutex around the whole callback serialises
+		// them.
+		var syncMu sync.Mutex
 		watcher.OnChange = func(absPath string, gistID string) {
+			syncMu.Lock()
+			defer syncMu.Unlock()
+
 			content, err := os.ReadFile(absPath)
 			if err != nil {
 				log.Printf("Error reading file %s: %v", absPath, err)
@@ -141,11 +150,28 @@ var monitorCmd = &cobra.Command{
 
 			log.Printf("  -> Uploading %s to Gist %s...", filepath.Base(absPath), gistID)
 
-			err = gistClient.UpdateFile(gistID, absPath, content)
+			remoteUpdatedAt, err := gistClient.UpdateFile(gistID, absPath, content)
 			if err != nil {
+				// Deliberately no state write: leaving the old timestamps in
+				// place is what keeps `status` and `pull` treating this file as
+				// unsynced instead of silently declaring success.
 				log.Printf("  [Error] Failed to update gist: %v", err)
-			} else {
-				log.Printf("  [Success] Gist updated successfully.")
+				return
+			}
+			log.Printf("  [Success] Gist updated successfully.")
+
+			// Reload once more — the PATCH is a network round-trip, long enough
+			// for another command to have rewritten state.json.
+			if err := sm.Load(); err != nil {
+				log.Printf("  Warning: failed to reload state.json before recording sync: %v", err)
+			}
+			fs, stillTracked := sm.Files[absPath]
+			if !stillTracked {
+				return
+			}
+			sm.Files[absPath] = recordSyncSuccess(fs, currentSHA, remoteUpdatedAt, time.Now().Unix())
+			if err := sm.Save(); err != nil {
+				log.Printf("  Warning: failed to record sync result: %v", err)
 			}
 		}
 
@@ -167,6 +193,19 @@ var monitorCmd = &cobra.Command{
 		fmt.Printf("Monitoring %d files. Press Ctrl+C to stop.\n", len(sm.Files))
 		return watcher.Start()
 	},
+}
+
+// recordSyncSuccess stamps a file's state after a PATCH the daemon confirmed.
+// UpdatedAt is the moment the sync succeeded rather than the moment the write
+// was noticed, ContentSHA is the digest of the bytes actually sent, and
+// RemoteUpdatedAt is the Gist timestamp our own PATCH produced — without that
+// last one every push leaves the Gist looking newer than the last thing we
+// observed, and `status` reports a remote change that is really our own.
+func recordSyncSuccess(fs state.FileState, contentSHA string, remoteUpdatedAt, nowUnix int64) state.FileState {
+	fs.UpdatedAt = nowUnix
+	fs.ContentSHA = contentSHA
+	fs.RemoteUpdatedAt = remoteUpdatedAt
+	return fs
 }
 
 func init() {

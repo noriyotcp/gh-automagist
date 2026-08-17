@@ -79,6 +79,33 @@ func TestFetchGistResponse_MultipleFiles(t *testing.T) {
 	assert.Equal(t, "2026-07-12T01:26:31Z", resp.UpdatedAt)
 }
 
+func TestGistResponse_ExtractsUpdatedAtFromWriteResponse(t *testing.T) {
+	// Trimmed response shape from PATCH /gists/:id and POST /gists — both
+	// return the full Gist object, which is where the new timestamp comes from.
+	body := `{
+		"id": "2decf6c462d9b4418f2",
+		"updated_at": "2026-07-10T22:03:26Z",
+		"files": { "README.md": { "filename": "README.md", "content": "hi" } }
+	}`
+	var resp GistResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &resp))
+	assert.Equal(t, "2decf6c462d9b4418f2", resp.ID)
+
+	updatedAt, err := resp.updatedAtUnix()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1783721006), updatedAt)
+}
+
+func TestGistResponse_UnparseableUpdatedAtIsAnError(t *testing.T) {
+	// A response we cannot read a timestamp out of must not silently become
+	// epoch 0 — that would look like "never observed" and re-flag the file.
+	resp := GistResponse{ID: "abc", UpdatedAt: "not a timestamp"}
+
+	updatedAt, err := resp.updatedAtUnix()
+	require.Error(t, err)
+	assert.Zero(t, updatedAt)
+}
+
 func TestGistCommitEntry_ExtractsCommittedAt(t *testing.T) {
 	// Response shape from GET /gists/:id/commits?per_page=1
 	body := `[

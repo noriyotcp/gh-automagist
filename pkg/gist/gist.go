@@ -25,8 +25,14 @@ type gistFile struct {
 	Content string `json:"content"`
 }
 
-// UpdateFile PATCHes the Gist with the file's content.
-func (c *Client) UpdateFile(gistID string, localFilePath string, content []byte) error {
+// UpdateFile PATCHes the Gist with the file's content and returns the Gist's
+// new updated_at as a unix epoch. The PATCH response body is the full Gist
+// object, so the caller records the new remote timestamp without a second
+// round-trip. An unparseable timestamp is returned as an error even though the
+// PATCH itself succeeded: the caller's state write would otherwise carry a
+// value we do not understand, and skipping it only makes the next sync repeat
+// the work.
+func (c *Client) UpdateFile(gistID string, localFilePath string, content []byte) (updatedAt int64, err error) {
 	filename := filepath.Base(localFilePath)
 
 	payload := gistUpdateRequest{
@@ -39,22 +45,22 @@ func (c *Client) UpdateFile(gistID string, localFilePath string, content []byte)
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal gist update payload: %w", err)
+		return 0, fmt.Errorf("failed to marshal gist update payload: %w", err)
 	}
 
 	apiEndpoint := fmt.Sprintf("gists/%s", gistID)
 
 	restClient, err := api.DefaultRESTClient()
 	if err != nil {
-		return fmt.Errorf("failed to initialize github rest client: %w", err)
+		return 0, fmt.Errorf("failed to initialize github rest client: %w", err)
 	}
 
-	err = restClient.Patch(apiEndpoint, bytes.NewReader(payloadBytes), nil)
-	if err != nil {
-		return fmt.Errorf("failed to execute gist patch request: %w", err)
+	var resp GistResponse
+	if err := restClient.Patch(apiEndpoint, bytes.NewReader(payloadBytes), &resp); err != nil {
+		return 0, fmt.Errorf("failed to execute gist patch request: %w", err)
 	}
 
-	return nil
+	return resp.updatedAtUnix()
 }
 
 type gistCreateRequest struct {
@@ -63,8 +69,22 @@ type gistCreateRequest struct {
 	Files       map[string]gistFile `json:"files"`
 }
 
+// GistResponse is the subset of the Gist object we read from the create (POST)
+// and update (PATCH) endpoints. Both return the full object; we only need the
+// identity and the timestamp our own write just produced.
 type GistResponse struct {
-	ID string `json:"id"`
+	ID        string `json:"id"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// updatedAtUnix parses the RFC3339 updated_at into a unix epoch, matching the
+// unit stored in state.json's remote_updated_at.
+func (r GistResponse) updatedAtUnix() (int64, error) {
+	t, err := time.Parse(time.RFC3339, r.UpdatedAt)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse gist updated_at %q: %w", r.UpdatedAt, err)
+	}
+	return t.Unix(), nil
 }
 
 type gistFetchFile struct {
@@ -158,12 +178,15 @@ func (c *Client) FetchGistMeta(gistID string) (updatedAt int64, err error) {
 	return t.Unix(), nil
 }
 
-func (c *Client) CreateGist(localFilePath, description string, public bool) (string, error) {
+// CreateGist creates a Gist from the local file and returns its ID along with
+// the Gist's updated_at as a unix epoch, so the caller can record a remote
+// watermark from the moment the file is first tracked.
+func (c *Client) CreateGist(localFilePath, description string, public bool) (id string, updatedAt int64, err error) {
 	filename := filepath.Base(localFilePath)
 
 	content, err := os.ReadFile(localFilePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read file %s: %w", localFilePath, err)
+		return "", 0, fmt.Errorf("failed to read file %s: %w", localFilePath, err)
 	}
 
 	payload := gistCreateRequest{
@@ -178,19 +201,24 @@ func (c *Client) CreateGist(localFilePath, description string, public bool) (str
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal create gist payload: %w", err)
+		return "", 0, fmt.Errorf("failed to marshal create gist payload: %w", err)
 	}
 
 	restClient, err := api.DefaultRESTClient()
 	if err != nil {
-		return "", fmt.Errorf("failed to initialize github rest client: %w", err)
+		return "", 0, fmt.Errorf("failed to initialize github rest client: %w", err)
 	}
 
 	var response GistResponse
 	err = restClient.Post("gists", bytes.NewReader(payloadBytes), &response)
 	if err != nil {
-		return "", fmt.Errorf("failed to create gist via API: %w", err)
+		return "", 0, fmt.Errorf("failed to create gist via API: %w", err)
 	}
 
-	return response.ID, nil
+	// The Gist exists at this point, so an unparseable timestamp must not fail
+	// the call — that would orphan a created Gist the caller never records.
+	// updatedAt 0 degrades to the pre-watermark behaviour: the file looks
+	// "never observed" until its first successful push writes a real value.
+	createdAt, _ := response.updatedAtUnix()
+	return response.ID, createdAt, nil
 }
