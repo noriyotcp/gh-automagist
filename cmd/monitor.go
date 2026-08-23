@@ -190,6 +190,8 @@ var monitorCmd = &cobra.Command{
 		defer sm.DeletePID()
 		defer sm.DeleteMonitorInfo()
 
+		reconcileAtStartup(sm, gistClient)
+
 		fmt.Printf("Monitoring %d files. Press Ctrl+C to stop.\n", len(sm.Files))
 		return watcher.Start()
 	},
@@ -201,6 +203,25 @@ var monitorCmd = &cobra.Command{
 // RemoteUpdatedAt is the Gist timestamp our own PATCH produced — without that
 // last one every push leaves the Gist looking newer than the last thing we
 // observed, and `status` reports a remote change that is really our own.
+// reconcileAtStartup catches up on everything that happened while the daemon
+// was down: fsnotify only reports writes that occur while the watcher is live,
+// so an edit made between shutdown and startup would otherwise sit unsynced
+// until the file happened to be written again. Every failure here is logged
+// and swallowed — an unreachable API at boot must not stop the watcher.
+func reconcileAtStartup(sm *state.Manager, client gistPusher) {
+	targets := trackedPaths(sm)
+	if len(targets) == 0 {
+		return
+	}
+	log.Printf("[gh-automagist] reconciling %d tracked files...", len(targets))
+	summary := pushTargets(sm, client, targets, pushOptions{
+		logf: func(format string, args ...any) {
+			log.Printf(format, args...)
+		},
+	})
+	log.Printf("[gh-automagist] reconcile: %s", summary)
+}
+
 func recordSyncSuccess(fs state.FileState, contentSHA string, remoteUpdatedAt, nowUnix int64) state.FileState {
 	fs.UpdatedAt = nowUnix
 	fs.ContentSHA = contentSHA
