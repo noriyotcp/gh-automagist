@@ -23,6 +23,11 @@ var debounceInterval time.Duration
 // Kept at package scope so cmd/monitor.go and its test share one name.
 const debounceEnvVar = "GH_AUTOMAGIST_DEBOUNCE_INTERVAL"
 
+// GH_AUTOMAGIST_LOG_FILE carries the daemon's log destination from the parent
+// process to the detached child. It is internal plumbing rather than a knob:
+// setting it by hand on a foreground run just redirects that run's log.
+const logFileEnvVar = "GH_AUTOMAGIST_LOG_FILE"
+
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
 	Short: "Start monitoring files defined in state.json and sync them to GitHub Gists",
@@ -39,6 +44,14 @@ var monitorCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("could not determine executable path: %w", err)
 			}
+			// The child's stdio is wired to the null device below, so its log
+			// output would vanish. The parent picks the destination and hands
+			// it over, so it can also tell the user where to look.
+			logSM, err := state.NewManager()
+			if err != nil {
+				return fmt.Errorf("failed to initialize state manager: %w", err)
+			}
+			logPath := monitorLogPath(logSM.LogDir(), time.Now())
 			// Forward --debounce to the child so the daemon runs with the
 			// caller-specified interval. The env var is inherited automatically.
 			childArgs := []string{"monitor"}
@@ -47,6 +60,7 @@ var monitorCmd = &cobra.Command{
 			}
 			child := exec.Command(binary, childArgs...)
 			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			child.Env = append(os.Environ(), logFileEnvVar+"="+logPath)
 			child.Stdin = nil
 			child.Stdout = nil
 			child.Stderr = nil
@@ -63,14 +77,27 @@ var monitorCmd = &cobra.Command{
 				sm, err := state.NewManager()
 				if err == nil && sm.Load() == nil && sm.GetPID() != 0 {
 					fmt.Printf(" started! (PID: %d)\n", sm.GetPID())
+					fmt.Printf("Log: %s\n", displayPath(logPath))
 					return nil
 				}
 			}
 			fmt.Println(" (monitor may still be starting up)")
+			fmt.Printf("Log: %s\n", displayPath(logPath))
 			return nil
 		}
 
 		fmt.Println("Starting gh-automagist monitor...")
+
+		// Set by the parent when this process is the detached daemon child.
+		// An empty value means a foreground run, where stderr is the right
+		// place for the log and redirecting it would hide it from the user.
+		if logPath := os.Getenv(logFileEnvVar); logPath != "" {
+			logFile, err := openMonitorLog(logPath)
+			if err != nil {
+				return fmt.Errorf("failed to open monitor log: %w", err)
+			}
+			defer logFile.Close()
+		}
 
 		// 1. Load the state manager to know what files to watch
 		sm, err := state.NewManager()
@@ -203,6 +230,28 @@ var monitorCmd = &cobra.Command{
 // RemoteUpdatedAt is the Gist timestamp our own PATCH produced — without that
 // last one every push leaves the Gist looking newer than the last thing we
 // observed, and `status` reports a remote change that is really our own.
+// monitorLogPath names one file per daemon start. The timestamp layout matches
+// the log files the earlier Ruby implementation left in the same directory, so
+// a plain sort still interleaves the two correctly.
+func monitorLogPath(dir string, start time.Time) string {
+	return filepath.Join(dir, fmt.Sprintf("monitor_%s.log", start.Format("20060102_150405")))
+}
+
+// openMonitorLog redirects the standard logger to path, creating the log
+// directory on the way. The caller keeps the handle open for the process's
+// lifetime.
+func openMonitorLog(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	log.SetOutput(f)
+	return f, nil
+}
+
 // reconcileAtStartup catches up on everything that happened while the daemon
 // was down: fsnotify only reports writes that occur while the watcher is live,
 // so an edit made between shutdown and startup would otherwise sit unsynced

@@ -1,10 +1,15 @@
 package cmd
 
 import (
+	"log"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRecordSyncSuccess_StampsAllThreeSyncFacts(t *testing.T) {
@@ -33,4 +38,42 @@ func TestRecordSyncSuccess_LeavesPullSuppressionUntouched(t *testing.T) {
 	got := recordSyncSuccess(fs, "sha", 900, 800)
 
 	assert.Equal(t, int64(4242), got.PullSuppressUntil)
+}
+
+func TestMonitorLogPath_OneFilePerStartMatchingRubyLayout(t *testing.T) {
+	start := time.Date(2026, 8, 23, 15, 1, 19, 0, time.UTC)
+
+	got := monitorLogPath("/cfg/log", start)
+
+	assert.Equal(t, "/cfg/log/monitor_20260823_150119.log", got)
+}
+
+func TestOpenMonitorLog_CreatesDirectoryAndCapturesLogOutput(t *testing.T) {
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	path := filepath.Join(t.TempDir(), "log", "monitor_20260823_150119.log")
+
+	f, err := openMonitorLog(path)
+	require.NoError(t, err)
+	log.Printf("reconcile: 1 pushed")
+	require.NoError(t, f.Close())
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "reconcile: 1 pushed")
+}
+
+func TestOpenMonitorLog_AppendsInsteadOfTruncating(t *testing.T) {
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	path := filepath.Join(t.TempDir(), "monitor.log")
+	require.NoError(t, os.WriteFile(path, []byte("earlier run\n"), 0o644))
+
+	f, err := openMonitorLog(path)
+	require.NoError(t, err)
+	log.Printf("later run")
+	require.NoError(t, f.Close())
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "earlier run")
+	assert.Contains(t, string(content), "later run")
 }

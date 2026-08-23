@@ -210,6 +210,12 @@ func (m *Manager) KillMonitor(pid int) (killed bool, err error) {
 	}
 }
 
+// LogDir is where the daemon writes its run logs. Nothing creates it here;
+// the writer is responsible for that.
+func (m *Manager) LogDir() string {
+	return filepath.Join(m.configDir, "log")
+}
+
 // GetPID reads the monitor.pid file; returns 0 if missing.
 func (m *Manager) GetPID() int {
 	data, err := os.ReadFile(m.pidPath)
