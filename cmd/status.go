@@ -17,6 +17,7 @@ import (
 var (
 	inSyncStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
 	newerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+	dirtyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta
 	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
 )
 
@@ -86,10 +87,20 @@ var statusCmd = &cobra.Command{
 // statusBadge renders a short suffix describing the file's notify state.
 // Kept trivial so both status and dashboard can reuse it if we ever wire
 // dashboard through the same struct.
+//
+// [in sync] is the only badge that asserts agreement, so it is reached only
+// when both axes are known and both are quiet — an unreadable local file or a
+// failed Gist fetch reports itself instead of falling through to green.
 func statusBadge(s notify.FileStatus) string {
 	switch {
 	case s.Err != nil:
 		return errorStyle.Render(fmt.Sprintf("[error: %v]", s.Err))
+	case s.LocalErr != nil:
+		return errorStyle.Render(fmt.Sprintf("[local unreadable: %v]", s.LocalErr))
+	case s.LocalDirty && s.RemoteNewer:
+		return errorStyle.Render("[diverged: local + remote]")
+	case s.LocalDirty:
+		return dirtyStyle.Render("[local: unsynced]")
 	case s.RemoteNewer:
 		return newerStyle.Render("[remote: newer ⇧]")
 	default:

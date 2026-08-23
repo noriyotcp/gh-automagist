@@ -11,12 +11,21 @@ import (
 
 // FileState is one entry in state.json; field names mirror the Ruby implementation for cross-tool interop.
 type FileState struct {
-	GistID    string `json:"gist_id"`
+	GistID string `json:"gist_id"`
+	// UpdatedAt is when this file was last synced successfully, not when a
+	// local write was last noticed. A failed PATCH leaves it alone, which is
+	// what keeps pull's "local ahead" guard from waving the file through.
 	UpdatedAt int64  `json:"updated_at"`
 	Status    string `json:"status"` // e.g., "active"
 
-	RemoteUpdatedAt int64  `json:"remote_updated_at,omitempty"`
-	ContentSHA      string `json:"content_sha,omitempty"`
+	// RemoteUpdatedAt is the Gist timestamp we last observed, whether from a
+	// pull, an add, or our own successful push. Leaving it behind after a push
+	// makes the Gist look independently changed on the next status.
+	RemoteUpdatedAt int64 `json:"remote_updated_at,omitempty"`
+	// ContentSHA is the digest of the content at the last successful sync, in
+	// either direction: the bytes pulled down or the bytes pushed up. It is
+	// what makes local dirtiness detectable without a network call.
+	ContentSHA string `json:"content_sha,omitempty"`
 
 	// PullSuppressUntil is a unix-second deadline; paired with ContentSHA it
 	// gates the daemon's post-pull PATCH via pkg/monitor.ShouldSuppress.

@@ -37,16 +37,18 @@ var addCmd = &cobra.Command{
 			return err
 		}
 
+		content, err := os.ReadFile(absPath)
+		if err != nil {
+			return fmt.Errorf("failed to read file: %w", err)
+		}
+
 		gistClient := gist.NewClient()
 		var finalGistID string
+		var remoteUpdatedAt int64
 
 		if gistIDFlag != "" {
 			fmt.Printf("Linking %s to Gist %s...\n", path, gistIDFlag)
-			content, err := os.ReadFile(absPath)
-			if err != nil {
-				return fmt.Errorf("failed to read file: %w", err)
-			}
-			err = gistClient.UpdateFile(gistIDFlag, absPath, content)
+			remoteUpdatedAt, err = gistClient.UpdateFile(gistIDFlag, absPath, content)
 			if err != nil {
 				fmt.Println("Failed to link file to Gist. Please check the ID and permissions.")
 				return err
@@ -55,15 +57,23 @@ var addCmd = &cobra.Command{
 		} else {
 			fmt.Printf("Creating Gist for %s...\n", path)
 			desc := fmt.Sprintf("Automagist: %s", filepath.Base(absPath))
-			id, err := gistClient.CreateGist(absPath, desc, false)
+			id, createdAt, err := gistClient.CreateGist(absPath, desc, false)
 			if err != nil {
 				fmt.Println("Failed to create Gist.")
 				return err
 			}
 			finalGistID = id
+			remoteUpdatedAt = createdAt
 		}
 
+		// Local and remote are identical the instant `add` finishes, so record
+		// both watermarks now. Skipping this is what left every freshly added
+		// file permanently flagged as "remote: newer" until its first pull.
 		sm.AddTrackedFile(absPath, finalGistID, time.Now().Unix())
+		fs := sm.Files[absPath]
+		fs.RemoteUpdatedAt = remoteUpdatedAt
+		fs.ContentSHA = sha256Hex(content)
+		sm.Files[absPath] = fs
 		if err := sm.Save(); err != nil {
 			return fmt.Errorf("failed to save state: %w", err)
 		}
