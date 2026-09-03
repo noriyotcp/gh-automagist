@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -226,7 +227,9 @@ func runDashboardAddInteraction() bool {
 	}
 
 	if gistMode == "new" {
-		_ = addCmd.RunE(addCmd, []string{filePath})
+		if err := addCmd.RunE(addCmd, []string{filePath}); err != nil {
+			fmt.Printf("  [Error] %v\n", err)
+		}
 		return false
 	}
 
@@ -243,10 +246,57 @@ func runDashboardAddInteraction() bool {
 	}
 
 	_ = addCmd.Flags().Set("gist-id", gistID)
-	_ = addCmd.RunE(addCmd, []string{filePath})
 	// Reset the flag so it doesn't persist across calls
-	_ = addCmd.Flags().Set("gist-id", "")
+	defer func() { _ = addCmd.Flags().Set("gist-id", "") }()
+
+	err = addCmd.RunE(addCmd, []string{filePath})
+	if err == nil {
+		return false
+	}
+	if !errors.Is(err, errAddDiverged) {
+		fmt.Printf("  [Error] %v\n", err)
+		return false
+	}
+
+	// `add` printed both sides and wrote nothing. The flags that resolve it are
+	// CLI-only, so offer the same two directions here instead of sending the
+	// user out to a shell. huh renders inline on stderr with no alt screen
+	// (huh@v1.0.0/form.go:111-114), so the comparison above stays on screen.
+	promptLinkDirection(filePath)
 	return false
+}
+
+// promptLinkDirection asks which side wins after a blocked `add --gist-id` and
+// re-runs the command with the matching flag. addForce and addAdoptRemote are
+// package vars shared with the CLI, so they are cleared unconditionally: a
+// stale `true` would silently overwrite on the next add.
+func promptLinkDirection(filePath string) {
+	var direction string
+	err := huh.NewSelect[string]().
+		Title("Local and remote differ. Which side wins?").
+		Options(
+			huh.NewOption("Take the Gist's content (--adopt-remote, local file is backed up)", "adopt"),
+			huh.NewOption("Replace the Gist with the local file (--force)", "force"),
+			huh.NewOption("← Leave both alone", "cancel"),
+		).
+		Value(&direction).
+		Run()
+	if err != nil || direction == "cancel" {
+		fmt.Println("  Nothing was written.")
+		return
+	}
+
+	switch direction {
+	case "adopt":
+		addAdoptRemote = true
+	case "force":
+		addForce = true
+	}
+	defer func() { addAdoptRemote, addForce = false, false }()
+
+	if err := addCmd.RunE(addCmd, []string{filePath}); err != nil {
+		fmt.Printf("  [Error] %v\n", err)
+	}
 }
 
 // runDashboardRemoveInteraction runs the remove-file wizard; returns true if the user cancelled.

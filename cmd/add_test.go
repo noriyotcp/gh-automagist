@@ -69,6 +69,7 @@ func TestLinkExistingGist_BlocksOnDivergence(t *testing.T) {
 	err := linkExistingGist(sm, client, path, "g1", []byte("stale local copy\n"), silentAddOpts(false, false))
 
 	require.Error(t, err)
+	assert.ErrorIs(t, err, errAddDiverged, "the dashboard keys its direction prompt on this")
 	assert.Empty(t, client.updatedNames, "a blocked link costs no API write")
 	assert.NotContains(t, sm.Files, path, "a blocked link tracks nothing")
 	local, readErr := os.ReadFile(path)
@@ -186,6 +187,7 @@ func TestLinkExistingGist_AdoptRemoteNeedsARemoteFile(t *testing.T) {
 	err := linkExistingGist(sm, client, path, "g1", []byte("only local\n"), silentAddOpts(false, true))
 
 	require.Error(t, err)
+	assert.NotErrorIs(t, err, errAddDiverged, "no direction resolves a file the Gist does not hold")
 	assert.Empty(t, client.updatedNames)
 	assert.NotContains(t, sm.Files, path)
 }
@@ -197,6 +199,7 @@ func TestLinkExistingGist_FetchFailureTracksNothing(t *testing.T) {
 	err := linkExistingGist(sm, client, path, "g1", []byte("local\n"), silentAddOpts(false, false))
 
 	require.Error(t, err)
+	assert.NotErrorIs(t, err, errAddDiverged, "an unreachable gist is not a divergence")
 	assert.Empty(t, client.updatedNames, "an unreadable gist is never written to")
 	assert.NotContains(t, sm.Files, path)
 }
