@@ -362,6 +362,44 @@ func runDashboardRemoveInteraction() bool {
 }
 
 // runFilteredFileBrowser prompts for a file via a searchable list.
+// pickerEntry is one directory entry, reduced to what the picker renders. It
+// exists so the ordering below is testable without fabricating os.DirEntry.
+type pickerEntry struct {
+	name  string
+	isDir bool
+}
+
+// pickerOptions orders one directory's entries for the file browser: visible
+// names first, then dot-entries, each group keeping os.ReadDir's alphabetical
+// order. Directories get a trailing slash.
+//
+// Dot-entries are listed rather than skipped. Hiding them made the dashboard
+// unable to reach the files automagist mostly exists for — ~/.zshrc could not
+// be selected at all, and ~/.config could not be entered. They sort last so a
+// home directory full of .cache and .local does not bury everything else; the
+// picker enables huh's `/` filter for narrowing either group.
+func pickerOptions(entries []pickerEntry) []huh.Option[string] {
+	label := func(e pickerEntry) huh.Option[string] {
+		if e.isDir {
+			return huh.NewOption(e.name+"/", e.name)
+		}
+		return huh.NewOption(e.name, e.name)
+	}
+
+	options := make([]huh.Option[string], 0, len(entries))
+	for _, e := range entries {
+		if !strings.HasPrefix(e.name, ".") {
+			options = append(options, label(e))
+		}
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.name, ".") {
+			options = append(options, label(e))
+		}
+	}
+	return options
+}
+
 func runFilteredFileBrowser(startDir string) (string, error) {
 	currentDir := startDir
 	for {
@@ -370,20 +408,12 @@ func runFilteredFileBrowser(startDir string) (string, error) {
 			return "", err
 		}
 
-		var options []huh.Option[string]
-		options = append(options, huh.NewOption(".. (Up)", ".."))
-
+		picked := make([]pickerEntry, 0, len(entries))
 		for _, entry := range entries {
-			name := entry.Name()
-			if strings.HasPrefix(name, ".") {
-				continue // Skip hidden files for cleaner UI
-			}
-			label := name
-			if entry.IsDir() {
-				label += "/"
-			}
-			options = append(options, huh.NewOption(label, name))
+			picked = append(picked, pickerEntry{name: entry.Name(), isDir: entry.IsDir()})
 		}
+
+		options := append([]huh.Option[string]{huh.NewOption(".. (Up)", "..")}, pickerOptions(picked)...)
 
 		var selected string
 		clearScreen()
