@@ -47,9 +47,17 @@ tracked — the direction is a decision for you, made with --adopt-remote or
 			return fmt.Errorf("failed to resolve absolute path: %w", err)
 		}
 
+		// A missing local file is normally a typo, so it stops here. The one
+		// exception is adopting into a path that does not exist yet, which is
+		// how a second machine picks up a Gist it has no copy of. Requiring
+		// --adopt-remote keeps a mistyped path from silently creating a file.
+		localMissing := false
 		if _, err := os.Stat(absPath); os.IsNotExist(err) {
-			fmt.Printf("File not found: %s\n", path)
-			return nil
+			if gistIDFlag == "" || !addAdoptRemote {
+				fmt.Printf("File not found: %s\n", path)
+				return nil
+			}
+			localMissing = true
 		}
 
 		sm, err := state.NewManager()
@@ -60,9 +68,12 @@ tracked — the direction is a decision for you, made with --adopt-remote or
 			return err
 		}
 
-		content, err := os.ReadFile(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to read file: %w", err)
+		var content []byte
+		if !localMissing {
+			content, err = os.ReadFile(absPath)
+			if err != nil {
+				return fmt.Errorf("failed to read file: %w", err)
+			}
 		}
 
 		gistClient := gist.NewClient()
@@ -71,8 +82,9 @@ tracked — the direction is a decision for you, made with --adopt-remote or
 		if gistIDFlag != "" {
 			fmt.Printf("Linking %s to Gist %s...\n", path, gistIDFlag)
 			if err := linkExistingGist(sm, gistClient, absPath, gistIDFlag, content, addOptions{
-				force:       addForce,
-				adoptRemote: addAdoptRemote,
+				force:        addForce,
+				adoptRemote:  addAdoptRemote,
+				localMissing: localMissing,
 				logf: func(format string, args ...any) {
 					fmt.Printf(format+"\n", args...)
 				},
@@ -117,7 +129,12 @@ type gistLinker interface {
 type addOptions struct {
 	force       bool
 	adoptRemote bool
-	logf        func(format string, args ...any)
+	// localMissing is set when the path has no file yet and the caller asked to
+	// adopt the Gist's content into it. It suppresses the comparison entirely:
+	// there is no local digest to compare, and sha256 of nothing is still a
+	// real digest that could collide with an empty remote file.
+	localMissing bool
+	logf         func(format string, args ...any)
 }
 
 type addDecision int
@@ -140,18 +157,27 @@ var errAddDiverged = errors.New("local and remote differ")
 // is being linked to. remoteSHA is empty when the Gist holds no file of that
 // name.
 //
-//	no file of that name    push   nothing to overwrite; this is the plain link case
-//	remoteSHA == localSHA   link   both sides already agree, so no API write
-//	force                   push   caller accepts overwriting the Gist
-//	adoptRemote             adopt  caller accepts overwriting the local file
-//	otherwise               block  a real divergence — the caller picks a side
+//	no local file, no remote  block  neither side has anything to link
+//	no local file, adopting   adopt  create it from the Gist
+//	no local file otherwise   block  --adopt-remote states the intent to create
+//	no file of that name      push   nothing to overwrite; this is the plain link case
+//	remoteSHA == localSHA     link   both sides already agree, so no API write
+//	force                     push   caller accepts overwriting the Gist
+//	adoptRemote               adopt  caller accepts overwriting the local file
+//	otherwise                 block  a real divergence — the caller picks a side
 //
 // Identical content is checked before force so a forced link of bytes the Gist
 // already has costs no API write. Before this gate existed, --gist-id PATCHed
 // unconditionally: linking a second machine whose copy was stale silently
 // overwrote the newer content already in the Gist.
-func addGate(remoteSHA, localSHA string, force, adoptRemote bool) (addDecision, string) {
+func addGate(remoteSHA, localSHA string, localMissing, force, adoptRemote bool) (addDecision, string) {
 	switch {
+	case localMissing && remoteSHA == "":
+		return addDecisionBlock, "neither the path nor the Gist has a file of that name"
+	case localMissing && adoptRemote:
+		return addDecisionAdopt, "creating the file from the Gist"
+	case localMissing:
+		return addDecisionBlock, "the path has no file yet — pass --adopt-remote to create it from the Gist"
 	case remoteSHA == "" && adoptRemote:
 		return addDecisionBlock, "the Gist has no file of that name — there is nothing to adopt"
 	case remoteSHA == "":
@@ -178,14 +204,17 @@ func linkExistingGist(sm *state.Manager, client gistLinker, absPath, gistID stri
 		return fmt.Errorf("failed to read gist %s: %w", gistID, err)
 	}
 
-	localSHA := sha256Hex(localContent)
+	var localSHA string
+	if !opts.localMissing {
+		localSHA = sha256Hex(localContent)
+	}
 	remoteContent, present := remoteFiles[filename]
 	var remoteSHA string
 	if present {
 		remoteSHA = sha256Hex(remoteContent)
 	}
 
-	decision, reason := addGate(remoteSHA, localSHA, opts.force, opts.adoptRemote)
+	decision, reason := addGate(remoteSHA, localSHA, opts.localMissing, opts.force, opts.adoptRemote)
 	switch decision {
 	case addDecisionLink:
 		opts.logf("  Nothing sent: %s", reason)
@@ -200,12 +229,13 @@ func linkExistingGist(sm *state.Manager, client gistLinker, absPath, gistID stri
 		trackSynced(sm, absPath, gistID, localSHA, patchedAt)
 
 	case addDecisionAdopt:
-		if err := adoptRemoteContent(sm, absPath, gistID, remoteContent, remoteSHA, remoteUpdatedAt, opts.logf); err != nil {
+		opts.logf("  %s", reason)
+		if err := adoptRemoteContent(sm, absPath, gistID, remoteContent, remoteSHA, remoteUpdatedAt, opts.localMissing, opts.logf); err != nil {
 			return err
 		}
 
 	default:
-		if remoteSHA == "" {
+		if opts.localMissing || remoteSHA == "" {
 			return fmt.Errorf("aborted: %s — %s is not tracked", reason, displayPath(absPath))
 		}
 		reportDivergence(localContent, remoteContent, remoteUpdatedAt, opts.logf)
@@ -219,22 +249,28 @@ func linkExistingGist(sm *state.Manager, client gistLinker, absPath, gistID stri
 // mirrors pull's sequence — backup, persist the suppression marker, atomic
 // rename — because the file may already be tracked by a running daemon, whose
 // fsnotify write would otherwise bounce the adopted bytes straight back up.
-func adoptRemoteContent(sm *state.Manager, absPath, gistID string, remoteContent []byte, remoteSHA string, remoteUpdatedAt int64, logf func(string, ...any)) error {
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return fmt.Errorf("failed to stat %s: %w", displayPath(absPath), err)
-	}
-	perm := info.Mode().Perm()
+func adoptRemoteContent(sm *state.Manager, absPath, gistID string, remoteContent []byte, remoteSHA string, remoteUpdatedAt int64, localMissing bool, logf func(string, ...any)) error {
+	// Creating the file: no mode to inherit and nothing to back up. Parent
+	// directories are not created — writeAtomic reports a missing one, which
+	// is the right answer for a mistyped path.
+	perm := os.FileMode(0o644)
+	if !localMissing {
+		info, err := os.Stat(absPath)
+		if err != nil {
+			return fmt.Errorf("failed to stat %s: %w", displayPath(absPath), err)
+		}
+		perm = info.Mode().Perm()
 
-	localContent, err := os.ReadFile(absPath)
-	if err != nil {
-		return fmt.Errorf("failed to read %s: %w", displayPath(absPath), err)
+		localContent, err := os.ReadFile(absPath)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", displayPath(absPath), err)
+		}
+		backupPath, err := backupLocalFile(absPath, localContent, perm)
+		if err != nil {
+			return fmt.Errorf("failed to back up %s: %w", displayPath(absPath), err)
+		}
+		logf("  [Backup] %s", displayPath(backupPath))
 	}
-	backupPath, err := backupLocalFile(absPath, localContent, perm)
-	if err != nil {
-		return fmt.Errorf("failed to back up %s: %w", displayPath(absPath), err)
-	}
-	logf("  [Backup] %s", displayPath(backupPath))
 
 	// Must be persisted before the rename below; the daemon reacts to the
 	// fsnotify write and needs to see the marker before it decides on the PATCH.

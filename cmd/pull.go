@@ -226,15 +226,50 @@ func backupLocalFile(absPath string, content []byte, perm os.FileMode) (string, 
 // The daemon keys its fsnotify filter on the exact tracked path, so the temp
 // file's own Create event is ignored.
 func writeAtomic(absPath string, content []byte, perm os.FileMode) error {
-	tmpPath := absPath + ".automagist.tmp"
+	target, err := resolveForWrite(absPath)
+	if err != nil {
+		return err
+	}
+	tmpPath := target + ".automagist.tmp"
 	if err := os.WriteFile(tmpPath, content, perm); err != nil {
 		return fmt.Errorf("failed to write %s: %w", tmpPath, err)
 	}
-	if err := os.Rename(tmpPath, absPath); err != nil {
+	if err := os.Rename(tmpPath, target); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to rename %s into place: %w", tmpPath, err)
 	}
 	return nil
+}
+
+// resolveForWrite returns the path a write should actually replace: the file a
+// symlink points at, rather than the link itself.
+//
+// rename(2) over a symlink swaps the link for a regular file. A dotfile linked
+// into a dotfiles repository would be silently detached by a pull — the
+// repository's copy left untouched and stale, every later edit going nowhere,
+// with no error to notice. Writing through the link keeps that arrangement
+// intact.
+//
+// A path that does not exist yet resolves to itself: `add --gist-id
+// --adopt-remote` creates it. A symlink that does not resolve is an error
+// rather than something to replace.
+func resolveForWrite(absPath string) (string, error) {
+	info, err := os.Lstat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return absPath, nil
+		}
+		return "", fmt.Errorf("failed to inspect %s: %w", displayPath(absPath), err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return absPath, nil
+	}
+
+	target, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", fmt.Errorf("%s is a symlink that does not resolve: %w", displayPath(absPath), err)
+	}
+	return target, nil
 }
 
 func sha256Hex(content []byte) string {

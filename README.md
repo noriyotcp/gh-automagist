@@ -59,6 +59,18 @@ gh automagist add ~/.zshrc --gist-id <id>
 beside it before writing, and suppresses the daemon's echo PATCH the same way
 `pull` does.
 
+It also works when this machine has no copy of the file yet, which is the usual
+state of a genuinely fresh machine:
+
+```bash
+gh automagist add ~/.tigrc --gist-id <id> --adopt-remote
+```
+
+The file is created from the Gist and tracked. `--adopt-remote` is required for
+this — without it a mistyped path would silently create a file rather than
+reporting that it does not exist. Parent directories are not created; a missing
+one is reported.
+
 `gh automagist dashboard` reaches the same decision through its own prompt:
 "Add File" → "Link to an existing Gist" shows the comparison above and then
 asks which side wins, so the two directions are available without leaving the
@@ -71,6 +83,16 @@ revision history still has it:
 gh api gists/<id>/commits --jq '.[] | "\(.version[0:8])  \(.committed_at)"'
 gh api gists/<id>/<version> --jq '.files["<filename>"].content'
 ```
+
+## Symlinked files
+
+`pull` and `add --adopt-remote` write **through** a symlink rather than over it.
+A dotfile linked into a dotfiles repository — `~/.zshrc` pointing at
+`~/dotfiles/zshrc`, say — keeps its link, and the repository's copy receives the
+content. Replacing the link with a regular file would leave the repository stale
+and every later edit going nowhere, with nothing to notice.
+
+A symlink that does not resolve is reported rather than replaced.
 
 ## Configuration
 
