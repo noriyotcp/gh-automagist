@@ -25,7 +25,7 @@ gh extension install noriyotcp/gh-automagist
 
 | Command | Description |
 | :--- | :--- |
-| `gh automagist dashboard` | Open the interactive TUI dashboard to manage files, start/stop the monitor, and view status. |
+| `gh automagist dashboard` | Open the interactive TUI dashboard to manage files, start/stop the monitor, and view status. Linking a file to an existing Gist prompts for a direction in place when the two sides differ, so the `--adopt-remote` / `--force` decision does not send you back to the shell. |
 | `gh automagist add [path]` | Register a new local file to be monitored. Without `--gist-id` it creates a new Gist. With `--gist-id <id>` it reads the Gist first: identical content is linked without an API write, a name the Gist does not hold yet is uploaded, and a genuine difference is reported and blocked — nothing is sent and nothing is tracked until you pick a direction with `--adopt-remote` (take the Gist's content, backing up the local file) or `--force` (replace the Gist's content with the local file). |
 | `gh automagist remove [path]` | Stop monitoring a specific file. |
 | `gh automagist list` | View tracked files, open them in `$EDITOR`, or view the Gist online. |
@@ -58,6 +58,11 @@ gh automagist add ~/.zshrc --gist-id <id>
 `--adopt-remote` keeps a timestamped `.bak.<timestamp>` copy of the local file
 beside it before writing, and suppresses the daemon's echo PATCH the same way
 `pull` does.
+
+`gh automagist dashboard` reaches the same decision through its own prompt:
+"Add File" → "Link to an existing Gist" shows the comparison above and then
+asks which side wins, so the two directions are available without leaving the
+TUI.
 
 If a `--gist-id` link did overwrite something before you noticed, the Gist's own
 revision history still has it:

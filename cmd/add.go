@@ -129,6 +129,13 @@ const (
 	addDecisionBlock                    // the two sides differ and no direction was chosen
 )
 
+// errAddDiverged marks the one blocked outcome a caller can resolve by picking
+// a side: the Gist holds a file of the same name with different content. The
+// TUI dashboard matches on it to offer the same two directions the CLI exposes
+// as flags. The other blocked outcome — `--adopt-remote` with no such file in
+// the Gist — is deliberately not wrapped: no direction resolves it.
+var errAddDiverged = errors.New("local and remote differ")
+
 // addGate decides how `add --gist-id` reconciles a local file with the Gist it
 // is being linked to. remoteSHA is empty when the Gist holds no file of that
 // name.
@@ -156,7 +163,7 @@ func addGate(remoteSHA, localSHA string, force, adoptRemote bool) (addDecision, 
 	case adoptRemote:
 		return addDecisionAdopt, "adopting the Gist's content"
 	default:
-		return addDecisionBlock, "local and remote differ"
+		return addDecisionBlock, errAddDiverged.Error()
 	}
 }
 
@@ -198,10 +205,11 @@ func linkExistingGist(sm *state.Manager, client gistLinker, absPath, gistID stri
 		}
 
 	default:
-		if remoteSHA != "" && remoteSHA != localSHA {
-			reportDivergence(localContent, remoteContent, remoteUpdatedAt, opts.logf)
+		if remoteSHA == "" {
+			return fmt.Errorf("aborted: %s — %s is not tracked", reason, displayPath(absPath))
 		}
-		return fmt.Errorf("aborted: %s — nothing was written and %s is not tracked", reason, displayPath(absPath))
+		reportDivergence(localContent, remoteContent, remoteUpdatedAt, opts.logf)
+		return fmt.Errorf("aborted: %w — nothing was written and %s is not tracked", errAddDiverged, displayPath(absPath))
 	}
 
 	return sm.Save()

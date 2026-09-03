@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -226,7 +227,9 @@ func runDashboardAddInteraction() bool {
 	}
 
 	if gistMode == "new" {
-		_ = addCmd.RunE(addCmd, []string{filePath})
+		if err := addCmd.RunE(addCmd, []string{filePath}); err != nil {
+			fmt.Printf("  [Error] %v\n", err)
+		}
 		return false
 	}
 
@@ -243,10 +246,68 @@ func runDashboardAddInteraction() bool {
 	}
 
 	_ = addCmd.Flags().Set("gist-id", gistID)
-	_ = addCmd.RunE(addCmd, []string{filePath})
 	// Reset the flag so it doesn't persist across calls
-	_ = addCmd.Flags().Set("gist-id", "")
+	defer func() { _ = addCmd.Flags().Set("gist-id", "") }()
+
+	err = addCmd.RunE(addCmd, []string{filePath})
+	if err == nil {
+		return false
+	}
+	if !errors.Is(err, errAddDiverged) {
+		fmt.Printf("  [Error] %v\n", err)
+		return false
+	}
+
+	// `add` printed both sides and wrote nothing. The flags that resolve it are
+	// CLI-only, so offer the same two directions here instead of sending the
+	// user out to a shell. huh renders inline on stderr with no alt screen
+	// (huh@v1.0.0/form.go:111-114), so the comparison above stays on screen.
+	promptLinkDirection(filePath)
 	return false
+}
+
+// promptLinkDirection asks which side wins after a blocked `add --gist-id` and
+// re-runs the command with the matching flag. addForce and addAdoptRemote are
+// package vars shared with the CLI, so they are cleared unconditionally: a
+// stale `true` would silently overwrite on the next add.
+func promptLinkDirection(filePath string) {
+	var direction string
+	err := huh.NewSelect[string]().
+		Title("Local and remote differ. Which side wins?").
+		Options(
+			huh.NewOption("Take the Gist's content (--adopt-remote)", "adopt"),
+			huh.NewOption("Replace the Gist with the local file (--force)", "force"),
+			huh.NewOption("← Leave both alone", "cancel"),
+		).
+		Value(&direction).
+		Run()
+	if err != nil || direction == "cancel" {
+		fmt.Println("  Nothing was written.")
+		return
+	}
+
+	if err := applyLinkDirection(direction, filePath); err != nil {
+		fmt.Printf("  [Error] %v\n", err)
+	}
+}
+
+// applyLinkDirection re-runs `add` with the flag matching the chosen direction.
+// The flags are cleared on every return path, including an error one: they are
+// package vars shared with the CLI, so a stale `true` would silently overwrite
+// on the dashboard's next add.
+func applyLinkDirection(direction, filePath string) error {
+	defer func() { addAdoptRemote, addForce = false, false }()
+
+	switch direction {
+	case "adopt":
+		addAdoptRemote = true
+	case "force":
+		addForce = true
+	default:
+		return fmt.Errorf("unknown link direction %q", direction)
+	}
+
+	return addCmd.RunE(addCmd, []string{filePath})
 }
 
 // runDashboardRemoveInteraction runs the remove-file wizard; returns true if the user cancelled.
@@ -301,6 +362,44 @@ func runDashboardRemoveInteraction() bool {
 }
 
 // runFilteredFileBrowser prompts for a file via a searchable list.
+// pickerEntry is one directory entry, reduced to what the picker renders. It
+// exists so the ordering below is testable without fabricating os.DirEntry.
+type pickerEntry struct {
+	name  string
+	isDir bool
+}
+
+// pickerOptions orders one directory's entries for the file browser: visible
+// names first, then dot-entries, each group keeping os.ReadDir's alphabetical
+// order. Directories get a trailing slash.
+//
+// Dot-entries are listed rather than skipped. Hiding them made the dashboard
+// unable to reach the files automagist mostly exists for — ~/.zshrc could not
+// be selected at all, and ~/.config could not be entered. They sort last so a
+// home directory full of .cache and .local does not bury everything else; the
+// picker enables huh's `/` filter for narrowing either group.
+func pickerOptions(entries []pickerEntry) []huh.Option[string] {
+	label := func(e pickerEntry) huh.Option[string] {
+		if e.isDir {
+			return huh.NewOption(e.name+"/", e.name)
+		}
+		return huh.NewOption(e.name, e.name)
+	}
+
+	options := make([]huh.Option[string], 0, len(entries))
+	for _, e := range entries {
+		if !strings.HasPrefix(e.name, ".") {
+			options = append(options, label(e))
+		}
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.name, ".") {
+			options = append(options, label(e))
+		}
+	}
+	return options
+}
+
 func runFilteredFileBrowser(startDir string) (string, error) {
 	currentDir := startDir
 	for {
@@ -309,20 +408,12 @@ func runFilteredFileBrowser(startDir string) (string, error) {
 			return "", err
 		}
 
-		var options []huh.Option[string]
-		options = append(options, huh.NewOption(".. (Up)", ".."))
-
+		picked := make([]pickerEntry, 0, len(entries))
 		for _, entry := range entries {
-			name := entry.Name()
-			if strings.HasPrefix(name, ".") {
-				continue // Skip hidden files for cleaner UI
-			}
-			label := name
-			if entry.IsDir() {
-				label += "/"
-			}
-			options = append(options, huh.NewOption(label, name))
+			picked = append(picked, pickerEntry{name: entry.Name(), isDir: entry.IsDir()})
 		}
+
+		options := append([]huh.Option[string]{huh.NewOption(".. (Up)", "..")}, pickerOptions(picked)...)
 
 		var selected string
 		clearScreen()

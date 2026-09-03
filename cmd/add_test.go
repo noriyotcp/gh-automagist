@@ -69,6 +69,7 @@ func TestLinkExistingGist_BlocksOnDivergence(t *testing.T) {
 	err := linkExistingGist(sm, client, path, "g1", []byte("stale local copy\n"), silentAddOpts(false, false))
 
 	require.Error(t, err)
+	assert.ErrorIs(t, err, errAddDiverged, "the dashboard keys its direction prompt on this")
 	assert.Empty(t, client.updatedNames, "a blocked link costs no API write")
 	assert.NotContains(t, sm.Files, path, "a blocked link tracks nothing")
 	local, readErr := os.ReadFile(path)
@@ -186,6 +187,7 @@ func TestLinkExistingGist_AdoptRemoteNeedsARemoteFile(t *testing.T) {
 	err := linkExistingGist(sm, client, path, "g1", []byte("only local\n"), silentAddOpts(false, true))
 
 	require.Error(t, err)
+	assert.NotErrorIs(t, err, errAddDiverged, "no direction resolves a file the Gist does not hold")
 	assert.Empty(t, client.updatedNames)
 	assert.NotContains(t, sm.Files, path)
 }
@@ -197,6 +199,39 @@ func TestLinkExistingGist_FetchFailureTracksNothing(t *testing.T) {
 	err := linkExistingGist(sm, client, path, "g1", []byte("local\n"), silentAddOpts(false, false))
 
 	require.Error(t, err)
+	assert.NotErrorIs(t, err, errAddDiverged, "an unreachable gist is not a divergence")
 	assert.Empty(t, client.updatedNames, "an unreadable gist is never written to")
 	assert.NotContains(t, sm.Files, path)
+}
+
+// The dashboard's retry sets a package-var flag before re-running `add`. huh
+// itself needs a TTY and is not exercised here; what these cover is the flag
+// hygiene around it, since a leaked `true` overwrites on the next add.
+func TestApplyLinkDirection_ClearsFlagsOnEveryPath(t *testing.T) {
+	t.Cleanup(func() {
+		addAdoptRemote, addForce = false, false
+		_ = addCmd.Flags().Set("gist-id", "")
+	})
+
+	t.Run("succeeds and clears", func(t *testing.T) {
+		require.NoError(t, addCmd.Flags().Set("gist-id", "g1"))
+		// A path that does not exist makes RunE return before any API call.
+		require.NoError(t, applyLinkDirection("adopt", filepath.Join(t.TempDir(), "absent.md")))
+		assert.False(t, addAdoptRemote)
+		assert.False(t, addForce)
+	})
+
+	t.Run("clears after an error too", func(t *testing.T) {
+		require.NoError(t, addCmd.Flags().Set("gist-id", ""))
+		// Without --gist-id, RunE rejects the direction flag it was just handed.
+		require.Error(t, applyLinkDirection("force", filepath.Join(t.TempDir(), "absent.md")))
+		assert.False(t, addAdoptRemote)
+		assert.False(t, addForce)
+	})
+
+	t.Run("rejects an unknown direction without touching the flags", func(t *testing.T) {
+		require.Error(t, applyLinkDirection("sideways", "/nope"))
+		assert.False(t, addAdoptRemote)
+		assert.False(t, addForce)
+	})
 }
