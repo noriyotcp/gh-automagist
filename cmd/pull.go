@@ -169,8 +169,8 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 	}
 
 	if !pullNoBackup {
-		backupPath := fmt.Sprintf("%s.bak.%s", absPath, time.Now().Format("20060102-150405"))
-		if err := os.WriteFile(backupPath, localContent, localInfo.Mode().Perm()); err != nil {
+		backupPath, err := backupLocalFile(absPath, localContent, localInfo.Mode().Perm())
+		if err != nil {
 			fmt.Printf("  Error creating backup: %v\n", err)
 			return pullStatusError
 		}
@@ -189,15 +189,8 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 		return pullStatusError
 	}
 
-	// Atomic write: <path>.pull.tmp then rename over the original.
-	tmpPath := absPath + ".pull.tmp"
-	if err := os.WriteFile(tmpPath, remoteContent, localInfo.Mode().Perm()); err != nil {
-		fmt.Printf("  Error writing tmp: %v\n", err)
-		return pullStatusError
-	}
-	if err := os.Rename(tmpPath, absPath); err != nil {
-		_ = os.Remove(tmpPath)
-		fmt.Printf("  Error renaming into place: %v\n", err)
+	if err := writeAtomic(absPath, remoteContent, localInfo.Mode().Perm()); err != nil {
+		fmt.Printf("  Error writing file: %v\n", err)
 		return pullStatusError
 	}
 	fmt.Printf("  [Write] %d bytes written atomically\n", len(remoteContent))
@@ -216,6 +209,33 @@ func pullFile(sm *state.Manager, client *gist.Client, absPath string) pullStatus
 
 // pullSuppressGrace absorbs fsnotify jitter and the pull-Save → daemon-Load gap.
 const pullSuppressGrace = 2 * time.Second
+
+// backupLocalFile writes the file's current bytes beside it with a timestamped
+// suffix and returns the backup's path.
+func backupLocalFile(absPath string, content []byte, perm os.FileMode) (string, error) {
+	backupPath := fmt.Sprintf("%s.bak.%s", absPath, time.Now().Format("20060102-150405"))
+	if err := os.WriteFile(backupPath, content, perm); err != nil {
+		return "", err
+	}
+	return backupPath, nil
+}
+
+// writeAtomic writes content to a sibling temp file and renames it over
+// absPath, so no reader ever observes a half-written file. The temp file stays
+// in the target's own directory: a rename across filesystems is not atomic.
+// The daemon keys its fsnotify filter on the exact tracked path, so the temp
+// file's own Create event is ignored.
+func writeAtomic(absPath string, content []byte, perm os.FileMode) error {
+	tmpPath := absPath + ".automagist.tmp"
+	if err := os.WriteFile(tmpPath, content, perm); err != nil {
+		return fmt.Errorf("failed to write %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, absPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename %s into place: %w", tmpPath, err)
+	}
+	return nil
+}
 
 func sha256Hex(content []byte) string {
 	h := sha256.Sum256(content)
