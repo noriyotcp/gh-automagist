@@ -153,6 +153,29 @@ func TestLinkExistingGist_AdoptRemoteRewritesTheLocalFile(t *testing.T) {
 		"a running daemon must not bounce the adopted bytes back up")
 }
 
+func TestLinkExistingGist_AdoptRollsBackStateWhenTheWriteFails(t *testing.T) {
+	sm, path := newAddEnv(t, "notes.md", "stale local copy\n")
+	// Occupy the temp path writeAtomic wants with a directory, so the backup
+	// and the state marker both succeed and only the write itself fails.
+	require.NoError(t, os.Mkdir(path+".automagist.tmp", 0o700))
+
+	client := &fakePusher{
+		files:     map[string]map[string][]byte{"g1": {"notes.md": []byte("newer remote copy\n")}},
+		updatedAt: map[string]int64{"g1": 700},
+	}
+
+	err := linkExistingGist(sm, client, path, "g1", []byte("stale local copy\n"), silentAddOpts(false, true))
+
+	require.Error(t, err)
+	backups, globErr := filepath.Glob(path + ".bak.*")
+	require.NoError(t, globErr)
+	require.Len(t, backups, 1, "the failure has to come after the backup, or this tests nothing")
+	assert.NotContains(t, sm.Files, path, "a failed adopt must not leave the file looking linked")
+	local, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, "stale local copy\n", string(local))
+}
+
 func TestLinkExistingGist_AdoptRemoteNeedsARemoteFile(t *testing.T) {
 	sm, path := newAddEnv(t, "notes.md", "only local\n")
 	client := &fakePusher{

@@ -230,6 +230,10 @@ func adoptRemoteContent(sm *state.Manager, absPath, gistID string, remoteContent
 
 	// Must be persisted before the rename below; the daemon reacts to the
 	// fsnotify write and needs to see the marker before it decides on the PATCH.
+	// That ordering means state briefly describes a file we have not written
+	// yet, so a failed write rolls the entry back rather than leaving `add` to
+	// report failure while state.json claims the link succeeded.
+	prev, wasTracked := sm.Files[absPath]
 	effective, _ := resolveDebounce(false, 0, os.Getenv(debounceEnvVar))
 	trackSynced(sm, absPath, gistID, remoteSHA, remoteUpdatedAt)
 	fs := sm.Files[absPath]
@@ -240,6 +244,14 @@ func adoptRemoteContent(sm *state.Manager, absPath, gistID string, remoteContent
 	}
 
 	if err := writeAtomic(absPath, remoteContent, perm); err != nil {
+		if wasTracked {
+			sm.Files[absPath] = prev
+		} else {
+			sm.RemoveTrackedFile(absPath)
+		}
+		if saveErr := sm.Save(); saveErr != nil {
+			logf("  Warning: failed to roll back the state entry: %v", saveErr)
+		}
 		return fmt.Errorf("failed to write %s: %w", displayPath(absPath), err)
 	}
 	logf("  [Write] %d bytes adopted from the Gist", len(remoteContent))
