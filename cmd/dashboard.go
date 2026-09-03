@@ -286,17 +286,28 @@ func promptLinkDirection(filePath string) {
 		return
 	}
 
+	if err := applyLinkDirection(direction, filePath); err != nil {
+		fmt.Printf("  [Error] %v\n", err)
+	}
+}
+
+// applyLinkDirection re-runs `add` with the flag matching the chosen direction.
+// The flags are cleared on every return path, including an error one: they are
+// package vars shared with the CLI, so a stale `true` would silently overwrite
+// on the dashboard's next add.
+func applyLinkDirection(direction, filePath string) error {
+	defer func() { addAdoptRemote, addForce = false, false }()
+
 	switch direction {
 	case "adopt":
 		addAdoptRemote = true
 	case "force":
 		addForce = true
+	default:
+		return fmt.Errorf("unknown link direction %q", direction)
 	}
-	defer func() { addAdoptRemote, addForce = false, false }()
 
-	if err := addCmd.RunE(addCmd, []string{filePath}); err != nil {
-		fmt.Printf("  [Error] %v\n", err)
-	}
+	return addCmd.RunE(addCmd, []string{filePath})
 }
 
 // runDashboardRemoveInteraction runs the remove-file wizard; returns true if the user cancelled.

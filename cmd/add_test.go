@@ -203,3 +203,35 @@ func TestLinkExistingGist_FetchFailureTracksNothing(t *testing.T) {
 	assert.Empty(t, client.updatedNames, "an unreadable gist is never written to")
 	assert.NotContains(t, sm.Files, path)
 }
+
+// The dashboard's retry sets a package-var flag before re-running `add`. huh
+// itself needs a TTY and is not exercised here; what these cover is the flag
+// hygiene around it, since a leaked `true` overwrites on the next add.
+func TestApplyLinkDirection_ClearsFlagsOnEveryPath(t *testing.T) {
+	t.Cleanup(func() {
+		addAdoptRemote, addForce = false, false
+		_ = addCmd.Flags().Set("gist-id", "")
+	})
+
+	t.Run("succeeds and clears", func(t *testing.T) {
+		require.NoError(t, addCmd.Flags().Set("gist-id", "g1"))
+		// A path that does not exist makes RunE return before any API call.
+		require.NoError(t, applyLinkDirection("adopt", filepath.Join(t.TempDir(), "absent.md")))
+		assert.False(t, addAdoptRemote)
+		assert.False(t, addForce)
+	})
+
+	t.Run("clears after an error too", func(t *testing.T) {
+		require.NoError(t, addCmd.Flags().Set("gist-id", ""))
+		// Without --gist-id, RunE rejects the direction flag it was just handed.
+		require.Error(t, applyLinkDirection("force", filepath.Join(t.TempDir(), "absent.md")))
+		assert.False(t, addAdoptRemote)
+		assert.False(t, addForce)
+	})
+
+	t.Run("rejects an unknown direction without touching the flags", func(t *testing.T) {
+		require.Error(t, applyLinkDirection("sideways", "/nope"))
+		assert.False(t, addAdoptRemote)
+		assert.False(t, addForce)
+	})
+}
