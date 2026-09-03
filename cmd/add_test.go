@@ -14,27 +14,32 @@ import (
 
 func TestAddGate(t *testing.T) {
 	tests := []struct {
-		name        string
-		remoteSHA   string
-		localSHA    string
-		force       bool
-		adoptRemote bool
-		want        addDecision
+		name         string
+		remoteSHA    string
+		localSHA     string
+		localMissing bool
+		force        bool
+		adoptRemote  bool
+		want         addDecision
 	}{
-		{"absent from the gist is a plain link", "", "local", false, false, addDecisionPush},
-		{"absent stays a push even under force", "", "local", true, false, addDecisionPush},
-		{"absent leaves nothing to adopt", "", "local", false, true, addDecisionBlock},
-		{"identical content needs no transfer", "same", "same", false, false, addDecisionLink},
-		{"identical content wins over force", "same", "same", true, false, addDecisionLink},
-		{"identical content wins over adopt", "same", "same", false, true, addDecisionLink},
-		{"divergence blocks by default", "theirs", "ours", false, false, addDecisionBlock},
-		{"force sends local up", "theirs", "ours", true, false, addDecisionPush},
-		{"adopt brings remote down", "theirs", "ours", false, true, addDecisionAdopt},
+		{"absent from the gist is a plain link", "", "local", false, false, false, addDecisionPush},
+		{"absent stays a push even under force", "", "local", false, true, false, addDecisionPush},
+		{"absent leaves nothing to adopt", "", "local", false, false, true, addDecisionBlock},
+		{"identical content needs no transfer", "same", "same", false, false, false, addDecisionLink},
+		{"identical content wins over force", "same", "same", false, true, false, addDecisionLink},
+		{"identical content wins over adopt", "same", "same", false, false, true, addDecisionLink},
+		{"divergence blocks by default", "theirs", "ours", false, false, false, addDecisionBlock},
+		{"force sends local up", "theirs", "ours", false, true, false, addDecisionPush},
+		{"adopt brings remote down", "theirs", "ours", false, false, true, addDecisionAdopt},
+		{"no local file, adopting, creates it", "theirs", "", true, false, true, addDecisionAdopt},
+		{"no local file and no remote one", "", "", true, false, true, addDecisionBlock},
+		{"no local file without --adopt-remote", "theirs", "", true, false, false, addDecisionBlock},
+		{"no local file, force does not create", "theirs", "", true, true, false, addDecisionBlock},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, reason := addGate(tt.remoteSHA, tt.localSHA, tt.force, tt.adoptRemote)
+			got, reason := addGate(tt.remoteSHA, tt.localSHA, tt.localMissing, tt.force, tt.adoptRemote)
 			assert.Equal(t, tt.want, got)
 			assert.NotEmpty(t, reason, "every decision explains itself")
 		})
@@ -55,6 +60,12 @@ func newAddEnv(t *testing.T, name, content string) (*state.Manager, string) {
 
 func silentAddOpts(force, adoptRemote bool) addOptions {
 	return addOptions{force: force, adoptRemote: adoptRemote, logf: func(string, ...any) {}}
+}
+
+// silentAdoptIntoMissing is the `add --gist-id --adopt-remote` invocation for a
+// path that has no file yet.
+func silentAdoptIntoMissing() addOptions {
+	return addOptions{adoptRemote: true, localMissing: true, logf: func(string, ...any) {}}
 }
 
 // This is the cross-machine case that motivated the gate: machine B's copy is
@@ -177,6 +188,62 @@ func TestLinkExistingGist_AdoptRollsBackStateWhenTheWriteFails(t *testing.T) {
 	assert.Equal(t, "stale local copy\n", string(local))
 }
 
+// The second-machine case: the Gist exists, this machine has no copy of the
+// file yet, and --adopt-remote says to create it.
+func TestLinkExistingGist_AdoptCreatesAMissingFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sm, err := state.NewManager()
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "notes.md")
+
+	client := &fakePusher{
+		files:     map[string]map[string][]byte{"g1": {"notes.md": []byte("remote copy\n")}},
+		updatedAt: map[string]int64{"g1": 700},
+	}
+
+	require.NoError(t, linkExistingGist(sm, client, path, "g1", nil, silentAdoptIntoMissing()))
+
+	assert.Empty(t, client.updatedNames, "creating a local copy sends nothing up")
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "remote copy\n", string(got))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "no local mode to inherit")
+
+	backups, err := filepath.Glob(path + ".bak.*")
+	require.NoError(t, err)
+	assert.Empty(t, backups, "nothing existed to back up")
+
+	fs := sm.Files[path]
+	assert.Equal(t, "g1", fs.GistID)
+	assert.Equal(t, sha256Hex([]byte("remote copy\n")), fs.ContentSHA)
+	assert.Equal(t, int64(700), fs.RemoteUpdatedAt)
+	assert.Greater(t, fs.PullSuppressUntil, time.Now().Unix(),
+		"a fresh path in an already-watched directory still needs the echo guard")
+}
+
+func TestLinkExistingGist_AdoptIntoMissingNeedsARemoteFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sm, err := state.NewManager()
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "notes.md")
+
+	client := &fakePusher{
+		files:     map[string]map[string][]byte{"g1": {"other.md": []byte("unrelated\n")}},
+		updatedAt: map[string]int64{"g1": 700},
+	}
+
+	err = linkExistingGist(sm, client, path, "g1", nil, silentAdoptIntoMissing())
+
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errAddDiverged, "there is nothing to diverge from")
+	assert.NotContains(t, sm.Files, path)
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr), "a blocked create leaves no file behind")
+}
+
 func TestLinkExistingGist_AdoptRemoteNeedsARemoteFile(t *testing.T) {
 	sm, path := newAddEnv(t, "notes.md", "only local\n")
 	client := &fakePusher{
@@ -215,8 +282,10 @@ func TestApplyLinkDirection_ClearsFlagsOnEveryPath(t *testing.T) {
 
 	t.Run("succeeds and clears", func(t *testing.T) {
 		require.NoError(t, addCmd.Flags().Set("gist-id", "g1"))
-		// A path that does not exist makes RunE return before any API call.
-		require.NoError(t, applyLinkDirection("adopt", filepath.Join(t.TempDir(), "absent.md")))
+		// "force" on a path that does not exist makes RunE return before any
+		// API call. "adopt" would not: adopting into a missing path is how a
+		// second machine creates its copy, so it goes on to read the Gist.
+		require.NoError(t, applyLinkDirection("force", filepath.Join(t.TempDir(), "absent.md")))
 		assert.False(t, addAdoptRemote)
 		assert.False(t, addForce)
 	})
@@ -224,7 +293,7 @@ func TestApplyLinkDirection_ClearsFlagsOnEveryPath(t *testing.T) {
 	t.Run("clears after an error too", func(t *testing.T) {
 		require.NoError(t, addCmd.Flags().Set("gist-id", ""))
 		// Without --gist-id, RunE rejects the direction flag it was just handed.
-		require.Error(t, applyLinkDirection("force", filepath.Join(t.TempDir(), "absent.md")))
+		require.Error(t, applyLinkDirection("adopt", filepath.Join(t.TempDir(), "absent.md")))
 		assert.False(t, addAdoptRemote)
 		assert.False(t, addForce)
 	})
