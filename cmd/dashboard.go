@@ -275,7 +275,7 @@ func promptLinkDirection(filePath string) {
 	err := huh.NewSelect[string]().
 		Title("Local and remote differ. Which side wins?").
 		Options(
-			huh.NewOption("Take the Gist's content (--adopt-remote, local file is backed up)", "adopt"),
+			huh.NewOption("Take the Gist's content (--adopt-remote)", "adopt"),
 			huh.NewOption("Replace the Gist with the local file (--force)", "force"),
 			huh.NewOption("← Leave both alone", "cancel"),
 		).
