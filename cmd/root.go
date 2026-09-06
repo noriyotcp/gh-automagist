@@ -16,15 +16,31 @@ var (
 	Date    = "unknown"
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "automagist",
-	Short: "Automagically sync local files to GitHub Gists",
-	Long: `gh-automagist is an extension for the GitHub CLI that watches local files
+var rootCmd = newRootCmd()
+
+// The groups have to exist before any subcommand carrying a GroupID is added,
+// or cobra's AddCommand panics. Package-level variable initialization runs
+// ahead of every init(), so registering them here — rather than in an init() of
+// this file — keeps the per-command init() registrations safe regardless of the
+// order the compiler happens to walk the files in.
+func newRootCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "automagist",
+		Short: "Automagically sync local files to GitHub Gists",
+		Long: `gh-automagist is an extension for the GitHub CLI that watches local files
 and automatically synchronizes their changes seamlessly to GitHub Gists.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		// No subcommand → show help.
-		cmd.Help()
-	},
+		Run: func(cmd *cobra.Command, args []string) {
+			// No subcommand → show help.
+			cmd.Help()
+		},
+	}
+	c.AddGroup(
+		&cobra.Group{ID: "interactive", Title: "Interactive:"},
+		&cobra.Group{ID: "tracking", Title: "Tracking files:"},
+		&cobra.Group{ID: "sync", Title: "Syncing content:"},
+		&cobra.Group{ID: "daemon", Title: "Background daemon:"},
+	)
+	return c
 }
 
 // SetVersionInfo wires the goreleaser-injected build metadata into both the

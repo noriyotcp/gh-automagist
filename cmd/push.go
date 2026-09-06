@@ -18,8 +18,9 @@ var (
 )
 
 var pushCmd = &cobra.Command{
-	Use:   "push [path]",
-	Short: "Push tracked files up to their Gists",
+	Use:     "push [path]",
+	Short:   "Push tracked files up to their Gists",
+	GroupID: "sync",
 	Long: `Send local changes to each tracked file's Gist, skipping files that already match.
 If [path] is omitted, all tracked files are processed.
 

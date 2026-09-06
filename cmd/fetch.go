@@ -22,8 +22,9 @@ var (
 )
 
 var fetchCmd = &cobra.Command{
-	Use:   "fetch [path]",
-	Short: "Check tracked Gists for remote changes, optionally showing content diffs",
+	Use:     "fetch [path]",
+	Short:   "Check tracked Gists for remote changes, optionally showing content diffs",
+	GroupID: "sync",
 	Long: `Without --diff, reports which tracked files may have newer remote content
 based on Gist commit timestamps (no content is downloaded).
 

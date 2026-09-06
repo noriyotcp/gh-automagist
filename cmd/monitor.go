@@ -29,8 +29,9 @@ const debounceEnvVar = "GH_AUTOMAGIST_DEBOUNCE_INTERVAL"
 const logFileEnvVar = "GH_AUTOMAGIST_LOG_FILE"
 
 var monitorCmd = &cobra.Command{
-	Use:   "monitor",
-	Short: "Start monitoring files defined in state.json and sync them to GitHub Gists",
+	Use:     "monitor",
+	Short:   "Start monitoring files defined in state.json and sync them to GitHub Gists",
+	GroupID: "daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Prevent double-starting regardless of mode (daemon or foreground)
 		if isMonitorRunning() {

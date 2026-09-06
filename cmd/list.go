@@ -13,8 +13,9 @@ import (
 )
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List currently monitored files",
+	Use:     "list",
+	Short:   "List currently monitored files",
+	GroupID: "tracking",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		_, err := runListInteractive()
 		return err

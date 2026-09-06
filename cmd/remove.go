@@ -9,9 +9,10 @@ import (
 )
 
 var removeCmd = &cobra.Command{
-	Use:   "remove [path]",
-	Short: "Remove a file from monitoring",
-	Args:  cobra.ExactArgs(1),
+	Use:     "remove [path]",
+	Short:   "Remove a file from monitoring",
+	GroupID: "tracking",
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path := args[0]
 		absPath, err := filepath.Abs(path)
