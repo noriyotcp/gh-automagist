@@ -8,8 +8,9 @@ import (
 )
 
 var stopCmd = &cobra.Command{
-	Use:   "stop",
-	Short: "Stop the running monitor process",
+	Use:     "stop",
+	Short:   "Stop the running monitor process",
+	GroupID: "daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sm, err := state.NewManager()
 		if err != nil {

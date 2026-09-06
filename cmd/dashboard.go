@@ -20,9 +20,10 @@ import (
 )
 
 var dashboardCmd = &cobra.Command{
-	Use:   "dashboard",
-	Short: "Launch interactive TUI dashboard",
-	Long:  `Provide a continuous loop menu for managing gh-automagist operations using an interactive UI.`,
+	Use:     "dashboard",
+	Short:   "Launch interactive TUI dashboard",
+	GroupID: "interactive",
+	Long:    `Provide a continuous loop menu for managing gh-automagist operations using an interactive UI.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		runDashboard()
 	},

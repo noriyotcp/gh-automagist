@@ -22,8 +22,9 @@ var (
 )
 
 var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show monitor process status and currently monitored files",
+	Use:     "status",
+	Short:   "Show monitor process status and currently monitored files",
+	GroupID: "daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sm, err := state.NewManager()
 		if err != nil {

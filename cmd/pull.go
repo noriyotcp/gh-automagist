@@ -24,8 +24,9 @@ var (
 )
 
 var pullCmd = &cobra.Command{
-	Use:   "pull [path]",
-	Short: "Pull tracked files from their Gists back to local disk",
+	Use:     "pull [path]",
+	Short:   "Pull tracked files from their Gists back to local disk",
+	GroupID: "sync",
 	Long: `Fetch each tracked file's Gist content and apply it locally, with backup and safety checks.
 If [path] is omitted, all tracked files are processed.`,
 	Args: cobra.MaximumNArgs(1),

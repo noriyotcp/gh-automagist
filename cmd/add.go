@@ -19,8 +19,9 @@ var (
 )
 
 var addCmd = &cobra.Command{
-	Use:   "add [path]",
-	Short: "Add a file to be monitored",
+	Use:     "add [path]",
+	Short:   "Add a file to be monitored",
+	GroupID: "tracking",
 	Long: `Register a local file for monitoring, either as a new Gist or linked to an existing one.
 
 With --gist-id, the Gist is read before anything is written. If it already holds
