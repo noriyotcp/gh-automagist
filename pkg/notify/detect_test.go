@@ -14,22 +14,25 @@ import (
 )
 
 // fakeFetcher lets tests script FetchGistMeta responses without touching the
-// network and counts calls so we can verify Gist-level dedup.
+// network and counts calls so we can verify Gist-level dedup. shaByGist maps a
+// Gist ID to its filename -> content digest map; leaving it nil models a Gist
+// whose files we have never digested.
 type fakeFetcher struct {
 	metaByGist map[string]int64
+	shaByGist  map[string]map[string]string
 	errByGist  map[string]error
 	calls      map[string]int
 }
 
-func (f *fakeFetcher) FetchGistMeta(gistID string) (int64, error) {
+func (f *fakeFetcher) FetchGistMeta(gistID string) (int64, map[string]string, error) {
 	if f.calls == nil {
 		f.calls = make(map[string]int)
 	}
 	f.calls[gistID]++
 	if err, ok := f.errByGist[gistID]; ok {
-		return 0, err
+		return 0, nil, err
 	}
-	return f.metaByGist[gistID], nil
+	return f.metaByGist[gistID], f.shaByGist[gistID], nil
 }
 
 func newManager(t *testing.T, files map[string]state.FileState) *state.Manager {
@@ -241,6 +244,68 @@ func TestDetect_LocalDirtyIsReportedEvenWhenGistFetchFails(t *testing.T) {
 	require.Len(t, result, 1)
 	assert.ErrorIs(t, result[0].Err, fetchErr)
 	assert.True(t, result[0].LocalDirty)
+}
+
+func TestDetect_SiblingsInSharedGistStayInSyncAfterOnePush(t *testing.T) {
+	// The regression this change exists for: pushing one file bumps the Gist's
+	// updated_at for every file in it, so the sibling's stale RemoteUpdatedAt
+	// used to read as "the Gist moved". Content says otherwise, and content wins.
+	pushedPath, pushedSHA := writeTracked(t, "pushed.txt", "just pushed")
+	siblingPath, siblingSHA := writeTracked(t, "sibling.txt", "untouched for weeks")
+	sm := newManager(t, map[string]state.FileState{
+		pushedPath:  {GistID: "shared", RemoteUpdatedAt: 200, ContentSHA: pushedSHA},
+		siblingPath: {GistID: "shared", RemoteUpdatedAt: 100, ContentSHA: siblingSHA},
+	})
+	f := &fakeFetcher{
+		metaByGist: map[string]int64{"shared": 200},
+		shaByGist: map[string]map[string]string{"shared": {
+			"pushed.txt":  pushedSHA,
+			"sibling.txt": siblingSHA,
+		}},
+	}
+
+	result := Detect(sm, f)
+
+	byPath := indexByPath(result)
+	assert.False(t, byPath[pushedPath].RemoteNewer, "the file we just pushed is not newer than itself")
+	assert.False(t, byPath[siblingPath].RemoteNewer, "a sibling nobody touched must not inherit the Gist's new timestamp")
+}
+
+func TestDetect_RemoteNewerWhenContentDiffersDespiteEqualTimestamps(t *testing.T) {
+	// The inverse of the regression above: equal timestamps must not hide a
+	// genuine remote change, which is what proves content drives the verdict.
+	path, contentSHA := writeTracked(t, "tracked.txt", "what we last synced")
+	sm := newManager(t, map[string]state.FileState{
+		path: {GistID: "g1", RemoteUpdatedAt: 100, ContentSHA: contentSHA},
+	})
+	f := &fakeFetcher{
+		metaByGist: map[string]int64{"g1": 100},
+		shaByGist: map[string]map[string]string{"g1": {
+			"tracked.txt": "2222222222222222222222222222222222222222222222222222222222222222",
+		}},
+	}
+
+	result := Detect(sm, f)
+
+	require.Len(t, result, 1)
+	assert.True(t, result[0].RemoteNewer)
+}
+
+func TestDetect_FileMissingFromGistIsNotNewer(t *testing.T) {
+	// Nothing to pull, so no claim of newer content — see remoteNewerState.
+	path, contentSHA := writeTracked(t, "orphan.txt", "only here")
+	sm := newManager(t, map[string]state.FileState{
+		path: {GistID: "g1", RemoteUpdatedAt: 100, ContentSHA: contentSHA},
+	})
+	f := &fakeFetcher{
+		metaByGist: map[string]int64{"g1": 500},
+		shaByGist:  map[string]map[string]string{"g1": {"someone-else.txt": contentSHA}},
+	}
+
+	result := Detect(sm, f)
+
+	require.Len(t, result, 1)
+	assert.False(t, result[0].RemoteNewer)
 }
 
 func indexByPath(s []FileStatus) map[string]FileStatus {

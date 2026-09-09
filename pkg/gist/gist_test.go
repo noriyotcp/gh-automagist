@@ -1,7 +1,10 @@
 package gist
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,17 +109,61 @@ func TestGistResponse_UnparseableUpdatedAtIsAnError(t *testing.T) {
 	assert.Zero(t, updatedAt)
 }
 
-func TestGistCommitEntry_ExtractsCommittedAt(t *testing.T) {
-	// Response shape from GET /gists/:id/commits?per_page=1
-	body := `[
-		{
-			"version": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-			"committed_at": "2026-07-10T22:03:26Z"
-		}
-	]`
-	var commits []gistCommitEntry
-	require.NoError(t, json.Unmarshal([]byte(body), &commits))
+func TestFileSHAs_DigestsInlineContent(t *testing.T) {
+	files := map[string]gistFetchFile{
+		"a.txt": {Content: "hello world"},
+		"b.txt": {Content: ""},
+	}
 
-	require.Len(t, commits, 1)
-	assert.Equal(t, "2026-07-10T22:03:26Z", commits[0].CommittedAt)
+	shas, err := fileSHAs(files, func(string) ([]byte, error) {
+		t.Fatal("raw_url must not be fetched for untruncated files")
+		return nil, nil
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, sha256Hex("hello world"), shas["a.txt"])
+	assert.Equal(t, sha256Hex(""), shas["b.txt"])
+}
+
+func TestFileSHAs_ResolvesTruncatedContentFromRawURL(t *testing.T) {
+	// GitHub cuts `content` off for large files. Digesting the stub would put a
+	// digest of bytes that never existed on disk into the comparison.
+	full := "the whole file, all of it"
+	files := map[string]gistFetchFile{
+		"big.txt": {
+			Content:   "the whole file, al",
+			Truncated: true,
+			RawURL:    "https://gist.githubusercontent.com/u/g/raw/big.txt",
+		},
+	}
+
+	var requested []string
+	shas, err := fileSHAs(files, func(url string) ([]byte, error) {
+		requested = append(requested, url)
+		return []byte(full), nil
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"https://gist.githubusercontent.com/u/g/raw/big.txt"}, requested)
+	assert.Equal(t, sha256Hex(full), shas["big.txt"])
+}
+
+func TestFileSHAs_RawFetchFailureIsAnError(t *testing.T) {
+	// Dropping the key instead would read as "not in the Gist" downstream, which
+	// reports the file as in sync.
+	files := map[string]gistFetchFile{
+		"big.txt": {Content: "stub", Truncated: true, RawURL: "https://example.invalid/raw"},
+	}
+
+	shas, err := fileSHAs(files, func(string) ([]byte, error) {
+		return nil, errors.New("simulated 404")
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, shas)
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

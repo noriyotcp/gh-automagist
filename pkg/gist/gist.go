@@ -2,8 +2,12 @@ package gist
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -89,6 +93,11 @@ func (r GistResponse) updatedAtUnix() (int64, error) {
 
 type gistFetchFile struct {
 	Content string `json:"content"`
+	// Truncated is set by GitHub when Content holds only the first slice of a
+	// large file. RawURL then serves the whole thing, so any digest taken over
+	// Content alone would be of bytes that never existed on disk.
+	Truncated bool   `json:"truncated"`
+	RawURL    string `json:"raw_url"`
 }
 
 type gistFetchResponse struct {
@@ -149,33 +158,81 @@ func (c *Client) FetchAllFiles(gistID string) (files map[string][]byte, updatedA
 	return out, t.Unix(), nil
 }
 
-type gistCommitEntry struct {
-	CommittedAt string `json:"committed_at"`
-}
-
-// FetchGistMeta returns the timestamp of the Gist's most recent commit as a
-// unix epoch. Uses the commits endpoint rather than the full Gist so the
-// payload does not include any file content — useful for periodic polling
-// where only "did anything change" matters.
-func (c *Client) FetchGistMeta(gistID string) (updatedAt int64, err error) {
+// FetchGistMeta returns the Gist's updated_at as a unix epoch together with a
+// SHA256 hex digest of every file it holds, keyed by Gist filename. Callers
+// compare those digests against state.json's ContentSHA, so a push that only
+// bumps the Gist's timestamp does not make its untouched sibling files look
+// changed. The full-Gist endpoint carries both the timestamp and the content,
+// so a Gist under GitHub's truncation limit costs one request.
+func (c *Client) FetchGistMeta(gistID string) (updatedAt int64, contentSHAs map[string]string, err error) {
 	restClient, err := api.DefaultRESTClient()
 	if err != nil {
-		return 0, fmt.Errorf("failed to initialize github rest client: %w", err)
+		return 0, nil, fmt.Errorf("failed to initialize github rest client: %w", err)
 	}
 
-	var commits []gistCommitEntry
-	if err := restClient.Get(fmt.Sprintf("gists/%s/commits?per_page=1", gistID), &commits); err != nil {
-		return 0, fmt.Errorf("failed to fetch gist %s commits: %w", gistID, err)
-	}
-	if len(commits) == 0 {
-		return 0, fmt.Errorf("gist %s has no commits", gistID)
+	var resp gistFetchResponse
+	if err := restClient.Get(fmt.Sprintf("gists/%s", gistID), &resp); err != nil {
+		return 0, nil, fmt.Errorf("failed to fetch gist %s: %w", gistID, err)
 	}
 
-	t, err := time.Parse(time.RFC3339, commits[0].CommittedAt)
+	t, err := time.Parse(time.RFC3339, resp.UpdatedAt)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse gist committed_at %q: %w", commits[0].CommittedAt, err)
+		return 0, nil, fmt.Errorf("failed to parse gist updated_at %q: %w", resp.UpdatedAt, err)
 	}
-	return t.Unix(), nil
+
+	shas, err := fileSHAs(resp.Files, fetchRawURL)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to digest gist %s files: %w", gistID, err)
+	}
+	return t.Unix(), shas, nil
+}
+
+// fileSHAs digests each file's content, resolving truncated entries through
+// fetchRaw. A raw fetch that fails aborts the whole map rather than dropping
+// the file: an absent key reads as "not in the Gist", which would silently
+// report a file as in sync.
+func fileSHAs(files map[string]gistFetchFile, fetchRaw func(url string) ([]byte, error)) (map[string]string, error) {
+	out := make(map[string]string, len(files))
+	for name, f := range files {
+		content := []byte(f.Content)
+		if f.Truncated {
+			full, err := fetchRaw(f.RawURL)
+			if err != nil {
+				return nil, fmt.Errorf("truncated file %q: %w", name, err)
+			}
+			content = full
+		}
+		sum := sha256.Sum256(content)
+		out[name] = hex.EncodeToString(sum[:])
+	}
+	return out, nil
+}
+
+// fetchRawURL downloads a Gist file from its raw_url. The host is
+// gist.githubusercontent.com rather than the API host, so go-gh attaches no
+// Authorization header — raw Gist URLs are served on the strength of the URL
+// itself, secret Gists included.
+func fetchRawURL(url string) ([]byte, error) {
+	httpClient, err := api.DefaultHTTPClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize http client: %w", err)
+	}
+
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s returned %s", url, resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", url, err)
+	}
+	return body, nil
 }
 
 // CreateGist creates a Gist from the local file and returns its ID along with
