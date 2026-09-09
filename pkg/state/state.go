@@ -19,8 +19,11 @@ type FileState struct {
 	Status    string `json:"status"` // e.g., "active"
 
 	// RemoteUpdatedAt is the Gist timestamp we last observed, whether from a
-	// pull, an add, or our own successful push. Leaving it behind after a push
-	// makes the Gist look independently changed on the next status.
+	// pull, an add, or our own successful push. pull compares against it to
+	// skip a Gist that has not moved, and notify.Detect falls back to it for
+	// entries with no ContentSHA. Both readings are Gist-wide — one file's
+	// push moves the timestamp for all its siblings — which is why Detect
+	// prefers content wherever a digest exists.
 	RemoteUpdatedAt int64 `json:"remote_updated_at,omitempty"`
 	// ContentSHA is the digest of the content at the last successful sync, in
 	// either direction: the bytes pulled down or the bytes pushed up. It is
