@@ -107,7 +107,9 @@ type gistFetchResponse struct {
 
 // FetchFile returns the content of `filename` inside the given Gist along with
 // the Gist's updated_at as a unix epoch. GitHub does not expose a per-file
-// endpoint, so we fetch the whole Gist and pick out the entry.
+// endpoint, so we fetch the whole Gist and pick out the entry. Content the API
+// truncates is completed from raw_url — callers hash this against ContentSHA
+// and write it to disk, so a partial read would corrupt both.
 func (c *Client) FetchFile(gistID, filename string) (content []byte, gistUpdatedAt int64, err error) {
 	restClient, err := api.DefaultRESTClient()
 	if err != nil {
@@ -129,12 +131,18 @@ func (c *Client) FetchFile(gistID, filename string) (content []byte, gistUpdated
 		return nil, 0, fmt.Errorf("failed to parse gist updated_at %q: %w", resp.UpdatedAt, err)
 	}
 
-	return []byte(f.Content), t.Unix(), nil
+	content, err = resolveContent(f, fetchRawURL)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to read file %q in gist %s: %w", filename, gistID, err)
+	}
+	return content, t.Unix(), nil
 }
 
 // FetchAllFiles returns every file in the Gist keyed by filename, along with
-// the Gist's updated_at as a unix epoch. Single API call — call this instead
-// of looping FetchFile when you need multiple files from the same Gist.
+// the Gist's updated_at as a unix epoch. One API call for a Gist under
+// GitHub's truncation limit — call this instead of looping FetchFile when you
+// need multiple files from the same Gist. Truncated files cost one extra
+// request each, so their content is whole rather than a prefix.
 func (c *Client) FetchAllFiles(gistID string) (files map[string][]byte, updatedAt int64, err error) {
 	restClient, err := api.DefaultRESTClient()
 	if err != nil {
@@ -151,9 +159,9 @@ func (c *Client) FetchAllFiles(gistID string) (files map[string][]byte, updatedA
 		return nil, 0, fmt.Errorf("failed to parse gist updated_at %q: %w", resp.UpdatedAt, err)
 	}
 
-	out := make(map[string][]byte, len(resp.Files))
-	for name, f := range resp.Files {
-		out[name] = []byte(f.Content)
+	out, err := fileContents(resp.Files, fetchRawURL)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to read gist %s files: %w", gistID, err)
 	}
 	return out, t.Unix(), nil
 }
@@ -187,21 +195,42 @@ func (c *Client) FetchGistMeta(gistID string) (updatedAt int64, contentSHAs map[
 	return t.Unix(), shas, nil
 }
 
-// fileSHAs digests each file's content, resolving truncated entries through
-// fetchRaw. A raw fetch that fails aborts the whole map rather than dropping
-// the file: an absent key reads as "not in the Gist", which would silently
-// report a file as in sync.
-func fileSHAs(files map[string]gistFetchFile, fetchRaw func(url string) ([]byte, error)) (map[string]string, error) {
-	out := make(map[string]string, len(files))
+// resolveContent returns a file's whole content, completing it from raw_url
+// when the API truncated the inline copy. Every read path goes through here:
+// a prefix silently substituted for the real bytes would be written to disk by
+// pull and compared against ContentSHA everywhere else.
+func resolveContent(f gistFetchFile, fetchRaw func(url string) ([]byte, error)) ([]byte, error) {
+	if !f.Truncated {
+		return []byte(f.Content), nil
+	}
+	return fetchRaw(f.RawURL)
+}
+
+// fileContents resolves every file in the Gist. A raw fetch that fails aborts
+// the whole map rather than dropping the file: an absent key reads as "not in
+// the Gist", which notify.Detect reports as in sync and push reports as absent
+// from the Gist.
+func fileContents(files map[string]gistFetchFile, fetchRaw func(url string) ([]byte, error)) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(files))
 	for name, f := range files {
-		content := []byte(f.Content)
-		if f.Truncated {
-			full, err := fetchRaw(f.RawURL)
-			if err != nil {
-				return nil, fmt.Errorf("truncated file %q: %w", name, err)
-			}
-			content = full
+		content, err := resolveContent(f, fetchRaw)
+		if err != nil {
+			return nil, fmt.Errorf("truncated file %q: %w", name, err)
 		}
+		out[name] = content
+	}
+	return out, nil
+}
+
+// fileSHAs digests each file's resolved content. Same failure rule as
+// fileContents: an error beats a map with a hole in it.
+func fileSHAs(files map[string]gistFetchFile, fetchRaw func(url string) ([]byte, error)) (map[string]string, error) {
+	contents, err := fileContents(files, fetchRaw)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(contents))
+	for name, content := range contents {
 		sum := sha256.Sum256(content)
 		out[name] = hex.EncodeToString(sum[:])
 	}
