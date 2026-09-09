@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/noriyo_tcp/gh-automagist/pkg/state"
@@ -13,18 +14,22 @@ import (
 // tests substitute a mock without hitting the network; production code passes
 // *gist.Client.
 type Fetcher interface {
-	FetchGistMeta(gistID string) (updatedAt int64, err error)
+	FetchGistMeta(gistID string) (updatedAt int64, contentSHAs map[string]string, err error)
 }
 
 // FileStatus is the per-tracked-file notify status. The two axes are
-// independent: RemoteNewer answers "did the Gist move since we last observed
-// it", LocalDirty answers "does the file on disk still match what we last
-// synced". Both can be true at once, and neither implies the other.
+// independent: RemoteNewer answers "does the Gist hold different bytes than we
+// last synced", LocalDirty answers "does the file on disk still match what we
+// last synced". Both can be true at once, and neither implies the other.
 type FileStatus struct {
-	Path            string
-	GistID          string
+	Path   string
+	GistID string
+	// RemoteNewer is true when the Gist's copy of this file differs from the
+	// digest recorded at the last sync. It is per-file on purpose: the Gist
+	// timestamp is shared by every file in the Gist, so pushing one file used
+	// to make all its siblings look remotely changed.
 	RemoteNewer     bool
-	RemoteUpdatedAt int64 // Gist's most recent commit timestamp, unix epoch; 0 on Err
+	RemoteUpdatedAt int64 // Gist's updated_at, unix epoch; 0 on Err
 	// LocalDirty is true when the file on disk differs from ContentSHA, the
 	// digest recorded at the last successful sync. It stays false when no
 	// digest has been recorded yet — there is nothing to compare against, so
@@ -53,7 +58,7 @@ func Detect(sm *state.Manager, client Fetcher) []FileStatus {
 
 	result := make([]FileStatus, 0, len(sm.Files))
 	for gistID, paths := range gistToPaths {
-		remoteUpdatedAt, err := client.FetchGistMeta(gistID)
+		remoteUpdatedAt, remoteSHAs, err := client.FetchGistMeta(gistID)
 		for _, path := range paths {
 			localDirty, localErr := localDirtyState(path, sm.Files[path].ContentSHA)
 			if err != nil {
@@ -69,7 +74,7 @@ func Detect(sm *state.Manager, client Fetcher) []FileStatus {
 			result = append(result, FileStatus{
 				Path:            path,
 				GistID:          gistID,
-				RemoteNewer:     remoteUpdatedAt > sm.Files[path].RemoteUpdatedAt,
+				RemoteNewer:     remoteNewerState(sm.Files[path], remoteSHAs, remoteUpdatedAt, path),
 				RemoteUpdatedAt: remoteUpdatedAt,
 				LocalDirty:      localDirty,
 				LocalErr:        localErr,
@@ -81,6 +86,32 @@ func Detect(sm *state.Manager, client Fetcher) []FileStatus {
 		return result[i].Path < result[j].Path
 	})
 	return result
+}
+
+// remoteNewerState decides whether the Gist holds something we have not seen,
+// comparing content rather than the Gist's timestamp. The timestamp is a
+// property of the whole Gist, so a push to one file moves it for every sibling;
+// the digest is per file and stays put.
+//
+// Three cases, in order:
+//   - No ContentSHA recorded: nothing has been synced yet, or the entry predates
+//     the digest. Fall back to the timestamp comparison, which is all the
+//     information we have — a fresh entry with RemoteUpdatedAt 0 still gets
+//     flagged so the user pulls a baseline.
+//   - The file is absent from the Gist: there is nothing to pull, so no claim of
+//     newer content. `pull` would fail on the missing entry, and reporting it
+//     here would send the user straight at that failure.
+//   - Otherwise: newer exactly when the remote bytes differ from the ones we
+//     last synced.
+func remoteNewerState(fs state.FileState, remoteSHAs map[string]string, remoteUpdatedAt int64, path string) bool {
+	if fs.ContentSHA == "" {
+		return remoteUpdatedAt > fs.RemoteUpdatedAt
+	}
+	remoteSHA, ok := remoteSHAs[filepath.Base(path)]
+	if !ok {
+		return false
+	}
+	return remoteSHA != fs.ContentSHA
 }
 
 // localDirtyState compares the file on disk against the digest recorded at the
