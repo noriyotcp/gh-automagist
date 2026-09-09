@@ -225,12 +225,6 @@ var monitorCmd = &cobra.Command{
 	},
 }
 
-// recordSyncSuccess stamps a file's state after a PATCH the daemon confirmed.
-// UpdatedAt is the moment the sync succeeded rather than the moment the write
-// was noticed, ContentSHA is the digest of the bytes actually sent, and
-// RemoteUpdatedAt is the Gist timestamp our own PATCH produced — without that
-// last one every push leaves the Gist looking newer than the last thing we
-// observed, and `status` reports a remote change that is really our own.
 // monitorLogPath names one file per daemon start. The timestamp layout matches
 // the log files the earlier Ruby implementation left in the same directory, so
 // a plain sort still interleaves the two correctly.
@@ -272,6 +266,14 @@ func reconcileAtStartup(sm *state.Manager, client gistPusher) {
 	log.Printf("[gh-automagist] reconcile: %s", summary)
 }
 
+// recordSyncSuccess stamps a file's state after a PATCH the daemon confirmed.
+// UpdatedAt is the moment the sync succeeded rather than the moment the write
+// was noticed, ContentSHA is the digest of the bytes actually sent, and
+// RemoteUpdatedAt is the Gist timestamp our own PATCH produced — pull's
+// "remote unchanged since last sync" check reads it, so leaving it behind
+// costs pull the cheap skip on a Gist nothing else touched. `status` no longer
+// depends on it here: ContentSHA is set on this path, so notify.Detect answers
+// from content rather than the Gist-wide timestamp.
 func recordSyncSuccess(fs state.FileState, contentSHA string, remoteUpdatedAt, nowUnix int64) state.FileState {
 	fs.UpdatedAt = nowUnix
 	fs.ContentSHA = contentSHA
