@@ -39,7 +39,7 @@ var removeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Removed %s from monitor.\n", absPath)
-		fmt.Println("Note: If 'gh-automagist monitor' is running, run 'gh automagist restart'.")
+		fmt.Println("A running monitor drops the file on its own; no restart needed.")
 		return nil
 	},
 }

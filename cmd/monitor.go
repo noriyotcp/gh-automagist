@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
@@ -146,12 +145,12 @@ var monitorCmd = &cobra.Command{
 		// 4. Hook up the watcher's OnChange callback to trigger the Gist upload.
 		// Debounce timers fire on their own goroutines, so two files edited
 		// together would otherwise run overlapping load-modify-save cycles over
-		// the same state.json. One mutex around the whole callback serialises
-		// them.
-		var syncMu sync.Mutex
+		// the same state.json. The watcher's own lock guards the manager, and
+		// taking it here serialises this callback against the event loop's
+		// reloads as well as against a second timer.
 		watcher.OnChange = func(absPath string, gistID string) {
-			syncMu.Lock()
-			defer syncMu.Unlock()
+			watcher.StateMu.Lock()
+			defer watcher.StateMu.Unlock()
 
 			content, err := os.ReadFile(absPath)
 			if err != nil {

@@ -31,8 +31,17 @@ type Watcher struct {
 	// A zero or negative value disables debouncing.
 	DebounceInterval time.Duration
 
+	// StateMu guards stateManager. The event loop reloads state.json on its own
+	// goroutine while debounce timers run OnChange on theirs, and both read and
+	// write the Files map — an OnChange that touches the manager must hold this.
+	StateMu sync.Mutex
+
 	timersMu sync.Mutex
 	timers   map[string]*debounceEntry
+
+	// watched is the set of directories currently handed to fsnotify, so
+	// syncWatches can tell an addition from a re-registration.
+	watched map[string]bool
 }
 
 type debounceEntry struct {
@@ -52,34 +61,17 @@ func NewWatcher(sm *state.Manager) (*Watcher, error) {
 		done:             make(chan bool),
 		DebounceInterval: DefaultDebounceInterval,
 		timers:           make(map[string]*debounceEntry),
+		watched:          make(map[string]bool),
 	}, nil
 }
 
 // Start runs the event loop; blocks until Stop().
 func (w *Watcher) Start() error {
-	// 1. Add all directories containing tracked files to the watcher
-	// fsnotify works best by watching the parent directory to catch vim/editor "save by replace" events.
-	dirsToWatch := make(map[string]bool)
-	for absPath := range w.stateManager.Files {
-		dir := filepath.Dir(absPath)
-		dirsToWatch[dir] = true
-	}
+	statePath := w.stateManager.StatePath()
 
-	for dir := range dirsToWatch {
-		// When using fsnotify.Add(), macOS FSEvents might attempt to scan the directory.
-		// If the directory contains broken symlinks (e.g., dangling dotfiles), it can throw an error like:
-		// "no such file or directory". We should catch this but not let it crash the whole monitor.
-		// With go's fsnotify, if we add a path ending in `/...`, it watches recursively, but we are just adding `dir`.
-		err := w.watcher.Add(dir)
-		if err != nil {
-			log.Printf("Warning: failed to watch directory cleanly %s: %v", dir, err)
-			log.Printf("  -> This is often caused by broken symlinks in the directory. Continuing anyway.")
-			// We intentionally do not 'continue' or 'return' here, because fsnotify often still succeeds
-			// in watching the valid files in the directory despite throwing an error on the broken symlink.
-		} else {
-			log.Printf("[gh-automagist] Watching directory: %s", dir)
-		}
-	}
+	// 1. Watch the parent directory of every tracked file, plus state.json's
+	// own directory (see syncWatches).
+	w.syncWatches()
 
 	// 2. Start the event loop
 	for {
@@ -91,21 +83,45 @@ func (w *Watcher) Start() error {
 
 			// We are only interested in Write or Create events (editors sometimes Create/Rename instead of Write)
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				if _, isTracked := w.stateManager.Files[event.Name]; isTracked {
-					log.Printf("[Sync] Change detected in %s", filepath.Base(event.Name))
+				// The registry itself changed: `add`, `remove` and `pull` all
+				// rewrite state.json while the daemon is up. Re-reading it here
+				// is what lets a file added just now be watched without a
+				// restart. Save() writes via tmp+rename, so the event on
+				// state.json is a Create; the sibling .tmp, monitor.pid and
+				// monitor.json in the same directory are ignored by the exact
+				// path match.
+				if event.Name == statePath {
+					w.StateMu.Lock()
+					if err := w.stateManager.Load(); err != nil {
+						log.Printf("Warning: failed to reload state.json: %v", err)
+					} else {
+						w.syncWatches()
+					}
+					w.StateMu.Unlock()
+					continue
+				}
 
-					// Reload so `pull`, `add` and `remove` writes made while the
-					// daemon was up are visible without a restart.
-					//
-					// No state is written here on purpose: state.json records
-					// what was synced, not what was typed. The timestamps move
-					// only after the PATCH succeeds, in the OnChange callback.
+				// Reload so `pull`, `add` and `remove` writes made while the
+				// daemon was up are visible without a restart.
+				//
+				// No state is written here on purpose: state.json records
+				// what was synced, not what was typed. The timestamps move
+				// only after the PATCH succeeds, in the OnChange callback.
+				w.StateMu.Lock()
+				_, isTracked := w.stateManager.Files[event.Name]
+				if isTracked {
+					log.Printf("[Sync] Change detected in %s", filepath.Base(event.Name))
 					if err := w.stateManager.Load(); err != nil {
 						log.Printf("Warning: failed to reload state.json: %v", err)
 					}
-					if fileState, stillTracked := w.stateManager.Files[event.Name]; stillTracked {
-						w.scheduleSync(event.Name, fileState.GistID)
-					}
+				}
+				fileState, stillTracked := w.stateManager.Files[event.Name]
+				w.StateMu.Unlock()
+
+				// Scheduling happens outside the lock: with debouncing disabled
+				// it calls OnChange inline, and OnChange takes the same lock.
+				if isTracked && stillTracked {
+					w.scheduleSync(event.Name, fileState.GistID)
 				}
 			}
 
@@ -119,6 +135,53 @@ func (w *Watcher) Start() error {
 			log.Println("[gh-automagist] Stopping file monitor...")
 			return nil
 		}
+	}
+}
+
+// syncWatches brings fsnotify's directory set in line with the registry.
+// Directories are watched rather than files because editors save by replacing
+// the file, which drops a watch on the inode. state.json's directory is always
+// in the set: it is how the event loop hears about `add`, `remove` and `pull`,
+// and it must stay watched even when no tracked file lives there.
+//
+// Called from Start() and from the event loop, both on the same goroutine.
+func (w *Watcher) syncWatches() {
+	desired := map[string]bool{
+		filepath.Dir(w.stateManager.StatePath()): true,
+	}
+	for absPath := range w.stateManager.Files {
+		desired[filepath.Dir(absPath)] = true
+	}
+
+	for dir := range desired {
+		if w.watched[dir] {
+			continue
+		}
+		// When using fsnotify.Add(), macOS FSEvents might attempt to scan the directory.
+		// If the directory contains broken symlinks (e.g., dangling dotfiles), it can throw an error like:
+		// "no such file or directory". We should catch this but not let it crash the whole monitor.
+		// With go's fsnotify, if we add a path ending in `/...`, it watches recursively, but we are just adding `dir`.
+		if err := w.watcher.Add(dir); err != nil {
+			log.Printf("Warning: failed to watch directory cleanly %s: %v", dir, err)
+			log.Printf("  -> This is often caused by broken symlinks in the directory. Continuing anyway.")
+			// We intentionally do not 'continue' or 'return' here, because fsnotify often still succeeds
+			// in watching the valid files in the directory despite throwing an error on the broken symlink.
+		} else {
+			log.Printf("[gh-automagist] Watching directory: %s", dir)
+		}
+		w.watched[dir] = true
+	}
+
+	for dir := range w.watched {
+		if desired[dir] {
+			continue
+		}
+		if err := w.watcher.Remove(dir); err != nil {
+			log.Printf("Warning: failed to stop watching %s: %v", dir, err)
+		} else {
+			log.Printf("[gh-automagist] Stopped watching directory: %s", dir)
+		}
+		delete(w.watched, dir)
 	}
 }
 
