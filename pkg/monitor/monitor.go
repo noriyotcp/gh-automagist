@@ -3,6 +3,7 @@ package monitor
 import (
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -40,8 +41,10 @@ type Watcher struct {
 	timers   map[string]*debounceEntry
 
 	// watched is the set of directories currently handed to fsnotify, so
-	// syncWatches can tell an addition from a re-registration.
-	watched map[string]bool
+	// syncWatches can tell an addition from a re-registration. addFailed holds
+	// the directories whose Add errored, to keep the retries from re-logging.
+	watched   map[string]bool
+	addFailed map[string]bool
 }
 
 type debounceEntry struct {
@@ -62,6 +65,7 @@ func NewWatcher(sm *state.Manager) (*Watcher, error) {
 		DebounceInterval: DefaultDebounceInterval,
 		timers:           make(map[string]*debounceEntry),
 		watched:          make(map[string]bool),
+		addFailed:        make(map[string]bool),
 	}, nil
 }
 
@@ -81,26 +85,36 @@ func (w *Watcher) Start() error {
 				return nil
 			}
 
-			// We are only interested in Write or Create events (editors sometimes Create/Rename instead of Write)
-			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				// The registry itself changed: `add`, `remove` and `pull` all
-				// rewrite state.json while the daemon is up. Re-reading it here
-				// is what lets a file added just now be watched without a
-				// restart. Save() writes via tmp+rename, so the event on
-				// state.json is a Create; the sibling .tmp, monitor.pid and
-				// monitor.json in the same directory are ignored by the exact
-				// path match.
-				if event.Name == statePath {
-					w.StateMu.Lock()
-					if err := w.stateManager.Load(); err != nil {
-						log.Printf("Warning: failed to reload state.json: %v", err)
-					} else {
-						w.syncWatches()
-					}
-					w.StateMu.Unlock()
+			// The registry itself changed: `add`, `remove` and `pull` all
+			// rewrite state.json while the daemon is up. Re-reading it here is
+			// what lets a file added just now be watched without a restart.
+			// Every event kind counts, not just Write/Create: Save() replaces
+			// the file by rename, and which kind a rename-into-a-watched-
+			// directory produces differs between inotify and kqueue. The
+			// replacement is atomic, so reacting to the wrong kind costs one
+			// redundant reload rather than a wrong answer. The sibling
+			// state.json.tmp, monitor.pid and monitor.json are ignored by the
+			// exact path match.
+			if event.Name == statePath {
+				// A Remove/Rename can also mean the file is gone for good, and
+				// Load treats a missing state.json as an empty registry —
+				// which would silently unwatch everything.
+				if _, err := os.Stat(statePath); err != nil {
 					continue
 				}
+				w.StateMu.Lock()
+				if err := w.stateManager.Load(); err != nil {
+					log.Printf("Warning: failed to reload state.json: %v", err)
+				} else {
+					w.syncWatches()
+					w.cancelUntrackedSyncs()
+				}
+				w.StateMu.Unlock()
+				continue
+			}
 
+			// We are only interested in Write or Create events (editors sometimes Create/Rename instead of Write)
+			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
 				// Reload so `pull`, `add` and `remove` writes made while the
 				// daemon was up are visible without a restart.
 				//
@@ -161,14 +175,23 @@ func (w *Watcher) syncWatches() {
 		// If the directory contains broken symlinks (e.g., dangling dotfiles), it can throw an error like:
 		// "no such file or directory". We should catch this but not let it crash the whole monitor.
 		// With go's fsnotify, if we add a path ending in `/...`, it watches recursively, but we are just adding `dir`.
+		//
+		// A failed Add is left out of `watched`, so the next registry change
+		// retries it — fsnotify often watches the valid files in the directory
+		// anyway, and a transient failure (EMFILE, a directory not created yet)
+		// would otherwise leave the file unwatched for the daemon's whole life,
+		// right after `add` reported that no restart was needed. The warning is
+		// printed once per directory so the retries stay quiet.
 		if err := w.watcher.Add(dir); err != nil {
-			log.Printf("Warning: failed to watch directory cleanly %s: %v", dir, err)
-			log.Printf("  -> This is often caused by broken symlinks in the directory. Continuing anyway.")
-			// We intentionally do not 'continue' or 'return' here, because fsnotify often still succeeds
-			// in watching the valid files in the directory despite throwing an error on the broken symlink.
-		} else {
-			log.Printf("[gh-automagist] Watching directory: %s", dir)
+			if !w.addFailed[dir] {
+				w.addFailed[dir] = true
+				log.Printf("Warning: failed to watch directory cleanly %s: %v", dir, err)
+				log.Printf("  -> This is often caused by broken symlinks in the directory. Continuing anyway.")
+			}
+			continue
 		}
+		log.Printf("[gh-automagist] Watching directory: %s", dir)
+		delete(w.addFailed, dir)
 		w.watched[dir] = true
 	}
 
@@ -182,6 +205,25 @@ func (w *Watcher) syncWatches() {
 			log.Printf("[gh-automagist] Stopped watching directory: %s", dir)
 		}
 		delete(w.watched, dir)
+	}
+}
+
+// cancelUntrackedSyncs drops armed debounce timers for files the registry no
+// longer lists. Without it, a `remove` inside the quiet window still uploads:
+// the timer holds the gist ID in its closure, so it would fire and PATCH a file
+// the user just stopped tracking. Callers hold StateMu.
+func (w *Watcher) cancelUntrackedSyncs() {
+	w.timersMu.Lock()
+	defer w.timersMu.Unlock()
+
+	for absPath, entry := range w.timers {
+		if _, tracked := w.stateManager.Files[absPath]; tracked {
+			continue
+		}
+		if entry.timer.Stop() {
+			log.Printf("[Sync] %s is no longer tracked; dropping its pending sync", filepath.Base(absPath))
+		}
+		delete(w.timers, absPath)
 	}
 }
 

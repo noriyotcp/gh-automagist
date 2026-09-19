@@ -93,6 +93,11 @@ func (m *Manager) Load() error {
 	if err != nil {
 		return fmt.Errorf("failed to parse state json: %w", err)
 	}
+	if files == nil {
+		// A state.json holding literal `null` parses without error and leaves
+		// the map nil, which would panic the first write to it.
+		files = make(map[string]FileState)
+	}
 	m.Files = files
 
 	return nil

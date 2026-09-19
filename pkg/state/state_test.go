@@ -153,6 +153,21 @@ func TestManager_Load_KeepsFilesWhenParseFails(t *testing.T) {
 	assert.Contains(t, m.Files, "/fake/kept", "a broken state.json must not empty the in-memory registry")
 }
 
+func TestManager_Load_NullStateJSONStaysWritable(t *testing.T) {
+	dir := setupTestEnv(t)
+	configDir := filepath.Join(dir, ".config", "gh-automagist")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "state.json"), []byte("null"), 0644))
+
+	m, err := NewManager()
+	require.NoError(t, err)
+	require.NoError(t, m.Load())
+
+	// `null` unmarshals into a nil map without error; assigning into one panics.
+	m.AddTrackedFile("/fake/path", "gist1", 100)
+	assert.Contains(t, m.Files, "/fake/path")
+}
+
 func TestManager_Save_NoTempLeaks(t *testing.T) {
 	_ = setupTestEnv(t)
 	m, err := NewManager()

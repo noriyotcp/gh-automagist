@@ -39,7 +39,9 @@ var removeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Removed %s from monitor.\n", absPath)
-		fmt.Println("A running monitor drops the file on its own; no restart needed.")
+		if note := registryChangeNote(); note != "" {
+			fmt.Println(note)
+		}
 		return nil
 	},
 }

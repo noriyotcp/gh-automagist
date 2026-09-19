@@ -33,6 +33,25 @@ func isMonitorRunning() bool {
 	return true
 }
 
+// registryChangeNote is what `add` and `remove` print about the running
+// daemon. A daemon started from this same version follows state.json live, so
+// there is nothing to do; an older one built its watch list once at startup and
+// still needs a restart to see the change.
+func registryChangeNote() string {
+	if !isMonitorRunning() {
+		return ""
+	}
+	sm, err := state.NewManager()
+	if err != nil {
+		return ""
+	}
+	info, err := sm.ReadMonitorInfo()
+	if err != nil || info == nil || info.Version != Version {
+		return "Note: the running monitor predates live registry tracking — run 'gh automagist restart' to pick this up."
+	}
+	return "The running monitor picks this up on its own; no restart needed."
+}
+
 // renderCompactHeader draws the sub-screen status bar.
 func renderCompactHeader() {
 	appStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)

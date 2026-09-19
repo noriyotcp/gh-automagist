@@ -214,6 +214,49 @@ func TestWatcher_PicksUpFileAddedWhileRunning(t *testing.T) {
 	}
 }
 
+// A `remove` landing inside the quiet window must cancel the pending sync: the
+// debounce timer carries the gist ID in its closure, so an uncancelled one
+// uploads a file the user just stopped tracking.
+func TestWatcher_RemoveCancelsPendingSync(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	targetFile := filepath.Join(tempDir, "doomed.txt")
+	require.NoError(t, os.WriteFile(targetFile, []byte("initial"), 0644))
+
+	sm, err := state.NewManager()
+	require.NoError(t, err)
+	sm.AddTrackedFile(targetFile, "gist_doomed", time.Now().Unix())
+	require.NoError(t, sm.Save())
+
+	w, err := NewWatcher(sm)
+	require.NoError(t, err)
+	// Long enough that the remove below lands well inside the quiet window.
+	w.DebounceInterval = 1 * time.Second
+
+	fired := make(chan string, 2)
+	w.OnChange = func(absPath, gistID string) { fired <- absPath }
+
+	go func() { _ = w.Start() }()
+	defer w.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	require.NoError(t, os.WriteFile(targetFile, []byte("edited"), 0644))
+	time.Sleep(150 * time.Millisecond) // let the timer arm
+
+	remover, err := state.NewManager()
+	require.NoError(t, err)
+	require.NoError(t, remover.Load())
+	remover.RemoveTrackedFile(targetFile)
+	require.NoError(t, remover.Save())
+
+	select {
+	case changed := <-fired:
+		t.Fatalf("pending sync fired for a file removed inside the debounce window: %s", changed)
+	case <-time.After(1500 * time.Millisecond):
+	}
+}
+
 // The mirror case: `remove` while the daemon is up must stop the syncing, which
 // depends on Load() dropping entries that are gone from state.json.
 func TestWatcher_DropsFileRemovedWhileRunning(t *testing.T) {
