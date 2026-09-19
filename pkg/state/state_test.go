@@ -117,6 +117,57 @@ func TestManager_RemoveTrackedFile(t *testing.T) {
 	assert.NotContains(t, m.Files, "/fake/path")
 }
 
+// Load replaces the in-memory map rather than merging into it: the daemon
+// reloads state.json to see another process's `remove`, and a merge would keep
+// syncing the file that was just dropped.
+func TestManager_Load_DropsEntriesMissingFromDisk(t *testing.T) {
+	_ = setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+
+	m.AddTrackedFile("/fake/kept", "gist_kept", 100)
+	require.NoError(t, m.Save())
+
+	// Another process removed one entry; this one still holds both in memory.
+	other, err := NewManager()
+	require.NoError(t, err)
+	other.AddTrackedFile("/fake/kept", "gist_kept", 100)
+	other.AddTrackedFile("/fake/dropped", "gist_dropped", 100)
+
+	require.NoError(t, other.Load())
+	assert.Contains(t, other.Files, "/fake/kept")
+	assert.NotContains(t, other.Files, "/fake/dropped")
+}
+
+func TestManager_Load_KeepsFilesWhenParseFails(t *testing.T) {
+	dir := setupTestEnv(t)
+	m, err := NewManager()
+	require.NoError(t, err)
+
+	m.AddTrackedFile("/fake/kept", "gist_kept", 100)
+	require.NoError(t, m.Save())
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".config", "gh-automagist", "state.json"), []byte("{not json"), 0644))
+
+	require.Error(t, m.Load())
+	assert.Contains(t, m.Files, "/fake/kept", "a broken state.json must not empty the in-memory registry")
+}
+
+func TestManager_Load_NullStateJSONStaysWritable(t *testing.T) {
+	dir := setupTestEnv(t)
+	configDir := filepath.Join(dir, ".config", "gh-automagist")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "state.json"), []byte("null"), 0644))
+
+	m, err := NewManager()
+	require.NoError(t, err)
+	require.NoError(t, m.Load())
+
+	// `null` unmarshals into a nil map without error; assigning into one panics.
+	m.AddTrackedFile("/fake/path", "gist1", 100)
+	assert.Contains(t, m.Files, "/fake/path")
+}
+
 func TestManager_Save_NoTempLeaks(t *testing.T) {
 	_ = setupTestEnv(t)
 	m, err := NewManager()

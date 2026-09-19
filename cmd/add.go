@@ -113,7 +113,9 @@ tracked — the direction is a decision for you, made with --adopt-remote or
 		}
 
 		fmt.Printf("Added %s to monitor (Gist ID: %s)\n", absPath, finalGistID)
-		fmt.Println("Note: If 'gh-automagist monitor' is running, run 'gh automagist restart' to pick up the new file.")
+		if note := registryChangeNote(); note != "" {
+			fmt.Println(note)
+		}
 
 		return nil
 	},

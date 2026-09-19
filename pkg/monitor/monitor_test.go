@@ -139,3 +139,178 @@ func TestWatcher_StopFlushesPendingSyncs(t *testing.T) {
 		t.Fatal("Stop() did not flush the pending debounced sync")
 	}
 }
+
+// A file registered by `add` while the daemon is up lives in a directory that
+// was not in the watch set at startup, so nothing about that file would ever
+// reach the event loop. The daemon hears about it through state.json instead.
+func TestWatcher_PicksUpFileAddedWhileRunning(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	existingDir := filepath.Join(tempDir, "existing")
+	require.NoError(t, os.MkdirAll(existingDir, 0755))
+	existingFile := filepath.Join(existingDir, "old.txt")
+	require.NoError(t, os.WriteFile(existingFile, []byte("initial"), 0644))
+
+	sm, err := state.NewManager()
+	require.NoError(t, err)
+	sm.AddTrackedFile(existingFile, "gist_old", time.Now().Unix())
+	require.NoError(t, sm.Save())
+
+	w, err := NewWatcher(sm)
+	require.NoError(t, err)
+	w.DebounceInterval = 50 * time.Millisecond
+
+	fired := make(chan string, 4)
+	w.OnChange = func(absPath, gistID string) { fired <- absPath }
+
+	go func() { _ = w.Start() }()
+	defer w.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	// Stand in for `gh automagist add`: a separate Manager over the same HOME
+	// writes the new entry, exactly as another process would.
+	newDir := filepath.Join(tempDir, "added-later")
+	require.NoError(t, os.MkdirAll(newDir, 0755))
+	newFile := filepath.Join(newDir, "new.txt")
+	require.NoError(t, os.WriteFile(newFile, []byte("initial"), 0644))
+
+	adder, err := state.NewManager()
+	require.NoError(t, err)
+	require.NoError(t, adder.Load())
+	adder.AddTrackedFile(newFile, "gist_new", time.Now().Unix())
+	require.NoError(t, adder.Save())
+
+	time.Sleep(200 * time.Millisecond) // let the state.json event land and the watch register
+
+	require.NoError(t, os.WriteFile(newFile, []byte("edited after add"), 0644))
+
+	select {
+	case changed := <-fired:
+		assert.Equal(t, newFile, changed)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Watcher did not pick up a file added while it was running")
+	}
+
+	// A second add, because every Save() replaces state.json by rename and the
+	// daemon saves after each successful PATCH: the registry watch has to
+	// survive being re-created, not just the first one.
+	secondDir := filepath.Join(tempDir, "added-even-later")
+	require.NoError(t, os.MkdirAll(secondDir, 0755))
+	secondFile := filepath.Join(secondDir, "second.txt")
+	require.NoError(t, os.WriteFile(secondFile, []byte("initial"), 0644))
+
+	adder.AddTrackedFile(secondFile, "gist_second", time.Now().Unix())
+	require.NoError(t, adder.Save())
+
+	time.Sleep(200 * time.Millisecond)
+	require.NoError(t, os.WriteFile(secondFile, []byte("edited after second add"), 0644))
+
+	select {
+	case changed := <-fired:
+		assert.Equal(t, secondFile, changed)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Watcher stopped following state.json after it was replaced once")
+	}
+}
+
+// A `remove` landing inside the quiet window must cancel the pending sync: the
+// debounce timer carries the gist ID in its closure, so an uncancelled one
+// uploads a file the user just stopped tracking.
+func TestWatcher_RemoveCancelsPendingSync(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	targetFile := filepath.Join(tempDir, "doomed.txt")
+	require.NoError(t, os.WriteFile(targetFile, []byte("initial"), 0644))
+
+	sm, err := state.NewManager()
+	require.NoError(t, err)
+	sm.AddTrackedFile(targetFile, "gist_doomed", time.Now().Unix())
+	require.NoError(t, sm.Save())
+
+	w, err := NewWatcher(sm)
+	require.NoError(t, err)
+	// Long enough that the remove below lands well inside the quiet window.
+	w.DebounceInterval = 1 * time.Second
+
+	fired := make(chan string, 2)
+	w.OnChange = func(absPath, gistID string) { fired <- absPath }
+
+	go func() { _ = w.Start() }()
+	defer w.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	require.NoError(t, os.WriteFile(targetFile, []byte("edited"), 0644))
+	time.Sleep(150 * time.Millisecond) // let the timer arm
+
+	remover, err := state.NewManager()
+	require.NoError(t, err)
+	require.NoError(t, remover.Load())
+	remover.RemoveTrackedFile(targetFile)
+	require.NoError(t, remover.Save())
+
+	select {
+	case changed := <-fired:
+		t.Fatalf("pending sync fired for a file removed inside the debounce window: %s", changed)
+	case <-time.After(1500 * time.Millisecond):
+	}
+}
+
+// The mirror case: `remove` while the daemon is up must stop the syncing, which
+// depends on Load() dropping entries that are gone from state.json.
+func TestWatcher_DropsFileRemovedWhileRunning(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	keptDir := filepath.Join(tempDir, "kept")
+	droppedDir := filepath.Join(tempDir, "dropped")
+	require.NoError(t, os.MkdirAll(keptDir, 0755))
+	require.NoError(t, os.MkdirAll(droppedDir, 0755))
+	keptFile := filepath.Join(keptDir, "kept.txt")
+	droppedFile := filepath.Join(droppedDir, "dropped.txt")
+	require.NoError(t, os.WriteFile(keptFile, []byte("initial"), 0644))
+	require.NoError(t, os.WriteFile(droppedFile, []byte("initial"), 0644))
+
+	sm, err := state.NewManager()
+	require.NoError(t, err)
+	sm.AddTrackedFile(keptFile, "gist_kept", time.Now().Unix())
+	sm.AddTrackedFile(droppedFile, "gist_dropped", time.Now().Unix())
+	require.NoError(t, sm.Save())
+
+	w, err := NewWatcher(sm)
+	require.NoError(t, err)
+	w.DebounceInterval = 50 * time.Millisecond
+
+	fired := make(chan string, 4)
+	w.OnChange = func(absPath, gistID string) { fired <- absPath }
+
+	go func() { _ = w.Start() }()
+	defer w.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	remover, err := state.NewManager()
+	require.NoError(t, err)
+	require.NoError(t, remover.Load())
+	remover.RemoveTrackedFile(droppedFile)
+	require.NoError(t, remover.Save())
+
+	time.Sleep(200 * time.Millisecond)
+
+	require.NoError(t, os.WriteFile(droppedFile, []byte("edited after remove"), 0644))
+	select {
+	case changed := <-fired:
+		t.Fatalf("OnChange fired for an untracked file: %s", changed)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Positive control: the same write on a still-tracked file does fire, so
+	// the silence above is untracking rather than a dead watcher.
+	require.NoError(t, os.WriteFile(keptFile, []byte("edited"), 0644))
+	select {
+	case changed := <-fired:
+		assert.Equal(t, keptFile, changed)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Watcher stopped reporting the file that is still tracked")
+	}
+}

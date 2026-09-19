@@ -146,8 +146,11 @@ var monitorCmd = &cobra.Command{
 		// 4. Hook up the watcher's OnChange callback to trigger the Gist upload.
 		// Debounce timers fire on their own goroutines, so two files edited
 		// together would otherwise run overlapping load-modify-save cycles over
-		// the same state.json. One mutex around the whole callback serialises
-		// them.
+		// the same state.json; syncMu serialises the callback against itself.
+		// The watcher's StateMu is taken separately, only around the stretches
+		// that touch the manager — holding it across the PATCH would stall the
+		// event loop for the length of a network round-trip, and a loop that
+		// stops draining fsnotify's queue eventually loses events.
 		var syncMu sync.Mutex
 		watcher.OnChange = func(absPath string, gistID string) {
 			syncMu.Lock()
@@ -158,21 +161,34 @@ var monitorCmd = &cobra.Command{
 				log.Printf("Error reading file %s: %v", absPath, err)
 				return
 			}
+			currentSHA := sha256Hex(content)
 
 			// Re-check the on-disk state right before deciding: pull may have
-			// written PullSuppressUntil after the event-loop reload.
+			// written PullSuppressUntil after the event-loop reload, and
+			// `remove` may have dropped the file inside the debounce window —
+			// in which case the upload must not happen at all. The timer holds
+			// the gist ID in its closure, so nothing else would stop it.
+			watcher.StateMu.Lock()
 			if err := sm.Load(); err != nil {
 				log.Printf("Warning: failed to reload state.json before suppression check: %v", err)
 			}
-			fs := sm.Files[absPath]
-			currentSHA := sha256Hex(content)
-			if monitor.ShouldSuppress(fs, currentSHA, time.Now().Unix()) {
-				log.Printf("  [Suppressed] %s matches pull baseline; skipping redundant PATCH", filepath.Base(absPath))
+			fs, tracked := sm.Files[absPath]
+			suppress := tracked && monitor.ShouldSuppress(fs, currentSHA, time.Now().Unix())
+			if suppress {
 				fs.PullSuppressUntil = 0
 				sm.Files[absPath] = fs
 				if err := sm.Save(); err != nil {
 					log.Printf("  Warning: failed to clear pull_suppress_until: %v", err)
 				}
+			}
+			watcher.StateMu.Unlock()
+
+			if !tracked {
+				log.Printf("  [Skipped] %s is no longer tracked; not uploading", filepath.Base(absPath))
+				return
+			}
+			if suppress {
+				log.Printf("  [Suppressed] %s matches pull baseline; skipping redundant PATCH", filepath.Base(absPath))
 				return
 			}
 
@@ -190,6 +206,8 @@ var monitorCmd = &cobra.Command{
 
 			// Reload once more — the PATCH is a network round-trip, long enough
 			// for another command to have rewritten state.json.
+			watcher.StateMu.Lock()
+			defer watcher.StateMu.Unlock()
 			if err := sm.Load(); err != nil {
 				log.Printf("  Warning: failed to reload state.json before recording sync: %v", err)
 			}

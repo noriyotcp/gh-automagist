@@ -84,10 +84,21 @@ func (m *Manager) Load() error {
 		return fmt.Errorf("failed to read state file: %w", err)
 	}
 
-	err = json.Unmarshal(data, &m.Files)
+	// Unmarshal into a map merges into whatever is already there, so a reload
+	// after another process ran `remove` would keep the deleted entry alive in
+	// memory. Decoding into a fresh map makes Load a true replacement — and
+	// leaves the previous Files intact when the parse fails.
+	files := make(map[string]FileState)
+	err = json.Unmarshal(data, &files)
 	if err != nil {
 		return fmt.Errorf("failed to parse state json: %w", err)
 	}
+	if files == nil {
+		// A state.json holding literal `null` parses without error and leaves
+		// the map nil, which would panic the first write to it.
+		files = make(map[string]FileState)
+	}
+	m.Files = files
 
 	return nil
 }
@@ -211,6 +222,12 @@ func (m *Manager) KillMonitor(pid int) (killed bool, err error) {
 	default:
 		return false, fmt.Errorf("failed to kill monitor (PID %d): %w", pid, killErr)
 	}
+}
+
+// StatePath is the state.json location. The monitor watches this file so a
+// registry change made by `add`, `remove` or `pull` reaches a running daemon.
+func (m *Manager) StatePath() string {
+	return m.statePath
 }
 
 // LogDir is where the daemon writes its run logs. Nothing creates it here;

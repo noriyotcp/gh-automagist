@@ -11,7 +11,7 @@ var restartForeground bool
 
 var restartCmd = &cobra.Command{
 	Use:     "restart",
-	Short:   "Restart the monitor to pick up the current state.json. Runs as a daemon by default",
+	Short:   "Restart the monitor to pick up a new binary or a new --debounce. Runs as a daemon by default",
 	GroupID: "daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sm, err := state.NewManager()
