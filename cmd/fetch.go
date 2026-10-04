@@ -25,12 +25,15 @@ var fetchCmd = &cobra.Command{
 	Use:     "fetch [path]",
 	Short:   "Check tracked Gists for remote changes, optionally showing content diffs",
 	GroupID: "sync",
-	Long: `Without --diff, reports which tracked files may have newer remote content
-based on Gist commit timestamps (no content is downloaded).
+	Long: `Without --diff, reports which tracked files the Gist no longer matches,
+comparing each file's digest against the one recorded at its last sync. An
+entry with no recorded digest falls back to the Gist's commit timestamp,
+which moves for every file in a shared Gist. Digesting reads the Gist's
+files, so this is not a metadata-only request — it just prints no content.
 
-With --diff, downloads the content of every file whose remote is newer and
-prints a unified diff (local vs remote) through the pager. Pass a path to
-diff a single tracked file instead of all newer ones.`,
+With --diff, prints a unified diff (local vs remote) through the pager for
+every file whose remote is newer. Pass a path to diff a single tracked file
+instead of all newer ones.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sm, err := state.NewManager()
