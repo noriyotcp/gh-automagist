@@ -28,7 +28,9 @@ var stopCmd = &cobra.Command{
 
 		killed, err := sm.KillMonitor(pid)
 		if err != nil {
-			fmt.Printf("Failed to stop monitor: %v\n", err)
+			// KillMonitor already names the PID, and both callers report what
+			// they get back — cobra for the CLI, the dashboard for the TUI.
+			// Printing here as well is how one failure became three lines.
 			return err
 		}
 		if killed {

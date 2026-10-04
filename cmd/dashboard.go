@@ -76,11 +76,18 @@ func runDashboard() {
 		backedOut := false
 		switch action {
 		case "status":
-			_ = statusCmd.RunE(statusCmd, []string{})
+			if err := statusCmd.RunE(statusCmd, []string{}); err != nil {
+				reportDashboardError(err)
+			}
 		case "list":
 			var err error
 			backedOut, err = runListInteractive()
-			_ = err
+			if err != nil {
+				reportDashboardError(err)
+				// A reported failure is worth reading, so fall through to
+				// waitForEnter() rather than returning straight to the menu.
+				backedOut = false
+			}
 		case "add":
 			if runDashboardAddInteraction() {
 				backedOut = true
@@ -92,7 +99,9 @@ func runDashboard() {
 		case "start":
 			startMonitorInBackground()
 		case "stop":
-			_ = stopCmd.RunE(stopCmd, []string{})
+			if err := stopCmd.RunE(stopCmd, []string{}); err != nil {
+				reportDashboardError(err)
+			}
 		case "exit":
 			fmt.Println("Goodbye!")
 			return
@@ -229,7 +238,7 @@ func runDashboardAddInteraction() bool {
 
 	if gistMode == "new" {
 		if err := addCmd.RunE(addCmd, []string{filePath}); err != nil {
-			fmt.Printf("  [Error] %v\n", err)
+			reportDashboardError(err)
 		}
 		return false
 	}
@@ -255,7 +264,7 @@ func runDashboardAddInteraction() bool {
 		return false
 	}
 	if !errors.Is(err, errAddDiverged) {
-		fmt.Printf("  [Error] %v\n", err)
+		reportDashboardError(err)
 		return false
 	}
 
@@ -288,7 +297,7 @@ func promptLinkDirection(filePath string) {
 	}
 
 	if err := applyLinkDirection(direction, filePath); err != nil {
-		fmt.Printf("  [Error] %v\n", err)
+		reportDashboardError(err)
 	}
 }
 
@@ -311,13 +320,34 @@ func applyLinkDirection(direction, filePath string) error {
 	return addCmd.RunE(addCmd, []string{filePath})
 }
 
+// reportDashboardError surfaces an error from a command the dashboard invoked
+// directly. Calling RunE bypasses cobra's error printing, so a discarded
+// return value left the screen blank and the menu looking like it had worked.
+// Every caller is followed by waitForEnter(), which is what makes the line
+// readable before the menu repaints.
+func reportDashboardError(err error) {
+	fmt.Printf("  [Error] %v\n", err)
+}
+
+// reportDashboardSetupError is reportDashboardError for a wizard that gives up
+// before showing anything. It owns the screen and the pause because the caller
+// returns "cancelled", which skips the loop's own waitForEnter().
+func reportDashboardSetupError(err error) {
+	clearScreen()
+	renderCompactHeader()
+	reportDashboardError(err)
+	waitForEnter()
+}
+
 // runDashboardRemoveInteraction runs the remove-file wizard; returns true if the user cancelled.
 func runDashboardRemoveInteraction() bool {
 	sm, err := state.NewManager()
 	if err != nil {
+		reportDashboardSetupError(err)
 		return true
 	}
 	if err := sm.Load(); err != nil {
+		reportDashboardSetupError(err)
 		return true
 	}
 	if len(sm.Files) == 0 {
@@ -358,7 +388,9 @@ func runDashboardRemoveInteraction() bool {
 		return true
 	}
 
-	_ = removeCmd.RunE(removeCmd, []string{selectedPath})
+	if err := removeCmd.RunE(removeCmd, []string{selectedPath}); err != nil {
+		reportDashboardError(err)
+	}
 	return false
 }
 
