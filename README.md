@@ -95,6 +95,13 @@ and every later edit going nowhere, with nothing to notice.
 
 A symlink that does not resolve is reported rather than replaced.
 
+The daemon watches both directories for such a file: the one holding the link and
+the one holding the target. Watching only the link's directory was enough on macOS
+and saw nothing at all on Linux, because an edit lands on the target's inode in a
+directory that nothing else would be watching. An event arriving under the target's
+path is attributed to the tracked path that names the link, so `status` and the
+daemon log keep calling the file what you registered it as.
+
 ## Configuration
 
 ### Debounce interval
