@@ -73,9 +73,9 @@ func TestWatcher_DetectsAnEditThroughASymlink(t *testing.T) {
 }
 
 // The two halves of the fix, checked without depending on which backend the
-// platform uses: resolveLink decides whether there is a second directory to
+// platform uses: symlinkTarget decides whether there is a second directory to
 // watch, and trackedName decides which registry key an event belongs to.
-func TestResolveLink(t *testing.T) {
+func TestSymlinkTarget(t *testing.T) {
 	dir := t.TempDir()
 	plain := filepath.Join(dir, "plain")
 	target := filepath.Join(dir, "target")
@@ -88,19 +88,19 @@ func TestResolveLink(t *testing.T) {
 
 	// A plain file needs no second watch, even though EvalSymlinks would
 	// happily rewrite a symlinked parent out of its path.
-	_, ok := resolveLink(plain)
+	_, ok := symlinkTarget(plain)
 	require.False(t, ok, "a plain file is not a link")
 
-	got, ok := resolveLink(link)
+	got, ok := symlinkTarget(link)
 	require.True(t, ok)
 	resolvedTarget, err := filepath.EvalSymlinks(target)
 	require.NoError(t, err)
 	require.Equal(t, resolvedTarget, got)
 
-	_, ok = resolveLink(broken)
+	_, ok = symlinkTarget(broken)
 	require.False(t, ok, "a link with nothing behind it has no bytes to sync")
 
-	_, ok = resolveLink(filepath.Join(dir, "absent"))
+	_, ok = symlinkTarget(filepath.Join(dir, "absent"))
 	require.False(t, ok, "a path that does not exist is not a link")
 }
 

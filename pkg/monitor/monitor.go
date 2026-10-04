@@ -163,10 +163,11 @@ func (w *Watcher) Start() error {
 	}
 }
 
-// resolveLink returns where a tracked symlink actually points. A path that is
-// not a symlink, or one whose link does not resolve, reports false: there is no
-// second directory to watch, and a broken link has no bytes to sync either.
-func resolveLink(absPath string) (string, bool) {
+// symlinkTarget is where a tracked symlink points, if it is one. Reporting
+// false covers two cases that share no mechanism but mean the same thing here:
+// a plain file has no second end to watch, and a link with nothing behind it
+// has no bytes to sync. Neither is a failure the caller has to tell apart.
+func symlinkTarget(absPath string) (string, bool) {
 	fi, err := os.Lstat(absPath)
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
 		return "", false
@@ -218,7 +219,7 @@ func (w *Watcher) syncWatches() {
 		// Only real symlinks are resolved: EvalSymlinks on a plain file still
 		// rewrites any symlinked parent (/var to /private/var on macOS), which
 		// would register a second watch on the same directory.
-		target, ok := resolveLink(absPath)
+		target, ok := symlinkTarget(absPath)
 		if !ok {
 			continue
 		}
