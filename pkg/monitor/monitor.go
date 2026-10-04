@@ -45,6 +45,12 @@ type Watcher struct {
 	// the directories whose Add errored, to keep the retries from re-logging.
 	watched   map[string]bool
 	addFailed map[string]bool
+
+	// linkTargets maps a symlinked tracked file's resolved path back to the
+	// tracked path, so an event arriving for the target can be attributed to
+	// the entry that names the link. Rebuilt by syncWatches and read by the
+	// event loop, both under the same access rules as stateManager.Files.
+	linkTargets map[string]string
 }
 
 type debounceEntry struct {
@@ -66,6 +72,7 @@ func NewWatcher(sm *state.Manager) (*Watcher, error) {
 		timers:           make(map[string]*debounceEntry),
 		watched:          make(map[string]bool),
 		addFailed:        make(map[string]bool),
+		linkTargets:      make(map[string]string),
 	}, nil
 }
 
@@ -122,20 +129,24 @@ func (w *Watcher) Start() error {
 				// what was synced, not what was typed. The timestamps move
 				// only after the PATCH succeeds, in the OnChange callback.
 				w.StateMu.Lock()
-				_, isTracked := w.stateManager.Files[event.Name]
+				// An event for a symlinked file arrives under the target's
+				// path on Linux, so resolve it to the key state.json uses
+				// before anything looks the entry up.
+				name := w.trackedName(event.Name)
+				_, isTracked := w.stateManager.Files[name]
 				if isTracked {
-					log.Printf("[Sync] Change detected in %s", filepath.Base(event.Name))
+					log.Printf("[Sync] Change detected in %s", filepath.Base(name))
 					if err := w.stateManager.Load(); err != nil {
 						log.Printf("Warning: failed to reload state.json: %v", err)
 					}
 				}
-				fileState, stillTracked := w.stateManager.Files[event.Name]
+				fileState, stillTracked := w.stateManager.Files[name]
 				w.StateMu.Unlock()
 
 				// Scheduling happens outside the lock: with debouncing disabled
 				// it calls OnChange inline, and OnChange takes the same lock.
 				if isTracked && stillTracked {
-					w.scheduleSync(event.Name, fileState.GistID)
+					w.scheduleSync(name, fileState.GistID)
 				}
 			}
 
@@ -152,6 +163,36 @@ func (w *Watcher) Start() error {
 	}
 }
 
+// resolveLink returns where a tracked symlink actually points. A path that is
+// not a symlink, or one whose link does not resolve, reports false: there is no
+// second directory to watch, and a broken link has no bytes to sync either.
+func resolveLink(absPath string) (string, bool) {
+	fi, err := os.Lstat(absPath)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	target, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", false
+	}
+	return target, true
+}
+
+// trackedName maps an event path onto the registry key it belongs to. An event
+// for a symlink's target carries the target's path, which is not what
+// state.json is keyed by; everything else passes through unchanged.
+//
+// Callers hold StateMu, which is also what guards linkTargets.
+func (w *Watcher) trackedName(eventPath string) string {
+	if _, tracked := w.stateManager.Files[eventPath]; tracked {
+		return eventPath
+	}
+	if linked, ok := w.linkTargets[eventPath]; ok {
+		return linked
+	}
+	return eventPath
+}
+
 // syncWatches brings fsnotify's directory set in line with the registry.
 // Directories are watched rather than files because editors save by replacing
 // the file, which drops a watch on the inode. state.json's directory is always
@@ -163,9 +204,28 @@ func (w *Watcher) syncWatches() {
 	desired := map[string]bool{
 		filepath.Dir(w.stateManager.StatePath()): true,
 	}
+	links := make(map[string]string, len(w.linkTargets))
 	for absPath := range w.stateManager.Files {
 		desired[filepath.Dir(absPath)] = true
+
+		// A tracked path can be a symlink into a dotfiles repository, where
+		// the bytes live in a directory nothing here would otherwise watch.
+		// inotify reports only what happens inside the directories it was
+		// given, so without the target's directory an edit to ~/.zshrc is
+		// invisible on Linux — kqueue happens to catch it because it opens
+		// the directory's entries too, and open(2) follows the link.
+		//
+		// Only real symlinks are resolved: EvalSymlinks on a plain file still
+		// rewrites any symlinked parent (/var to /private/var on macOS), which
+		// would register a second watch on the same directory.
+		target, ok := resolveLink(absPath)
+		if !ok {
+			continue
+		}
+		desired[filepath.Dir(target)] = true
+		links[target] = absPath
 	}
+	w.linkTargets = links
 
 	for dir := range desired {
 		if w.watched[dir] {
