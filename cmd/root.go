@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -51,8 +52,9 @@ func SetVersionInfo(v, c, d string) {
 	rootCmd.Version = fmt.Sprintf("%s (commit %s, built %s)", v, c, d)
 }
 
-func Execute() {
-	// Create a dummy gh command to ensure cobra generates usage like "gh automagist [command]"
+// newGhCmd wraps rootCmd in a dummy gh parent so cobra renders usage as
+// "gh automagist [command]" rather than naming the extension binary.
+func newGhCmd() *cobra.Command {
 	ghCmd := &cobra.Command{
 		Use:   "gh",
 		Short: "GitHub CLI",
@@ -61,14 +63,44 @@ func Execute() {
 		},
 	}
 	ghCmd.AddCommand(rootCmd)
+	return ghCmd
+}
 
-	// Inject "automagist" into os.Args so the dummy gh command properly routes to rootCmd
-	if len(os.Args) > 0 {
-		os.Args = append([]string{os.Args[0], "automagist"}, os.Args[1:]...)
+// ghArgs restates the process arguments the way the dummy gh parent expects:
+// gh runs the extension binary directly, so the "automagist" the usage text
+// advertises is never in os.Args.
+func ghArgs(osArgs []string) []string {
+	args := []string{"automagist"}
+	if len(osArgs) > 1 {
+		args = append(args, osArgs[1:]...)
+	}
+	return args
+}
+
+// run is Execute without the exit, so a test can read everything a failing
+// command emits. A nil writer leaves cobra's own default stream in place,
+// which is what keeps the usage block on stderr for the real process.
+func run(osArgs []string, out, errOut io.Writer) int {
+	ghCmd := newGhCmd()
+	ghCmd.SetArgs(ghArgs(osArgs))
+	if out != nil {
+		ghCmd.SetOut(out)
+	}
+	if errOut != nil {
+		ghCmd.SetErr(errOut)
 	}
 
+	// Cobra has already printed the error — with its "Error:" prefix, and the
+	// usage block unless the command silenced it — by the time Execute
+	// returns. Printing err again here is what put the message on stderr twice.
 	if err := ghCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
+	}
+	return 0
+}
+
+func Execute() {
+	if code := run(os.Args, nil, nil); code != 0 {
+		os.Exit(code)
 	}
 }
